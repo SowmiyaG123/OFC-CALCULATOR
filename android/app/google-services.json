@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "685316942347",
+    "project_id": "ofc-calculator",
+    "storage_bucket": "ofc-calculator.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:685316942347:android:d8fb4ccd468c4eb87c750e",
+        "android_client_info": {
+          "package_name": "com.example.ofc_calculator"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDGoTrnun20_m-fKcg6oJ_uXWLSINdIQJ4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
