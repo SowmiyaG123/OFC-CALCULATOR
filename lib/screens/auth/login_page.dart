@@ -1,4 +1,3 @@
-// screens/auth/login_page.dart
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../services/auth_service.dart';
@@ -33,7 +32,7 @@ class _LoginPageState extends State<LoginPage> {
     if (user != null && mounted) {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (context) => const MainDashboard()),
+        MaterialPageRoute(builder: (_) => const MainDashboard()),
       );
     }
   }

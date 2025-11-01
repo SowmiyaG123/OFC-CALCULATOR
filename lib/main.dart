@@ -1,28 +1,25 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'services/auth_service.dart';
+import 'package:hive_flutter/hive_flutter.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'screens/auth/login_page.dart';
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  if (kIsWeb) {
-    // Web: Use FirebaseOptions from your Firebase JS config
-    await Firebase.initializeApp(
-      options: const FirebaseOptions(
-        apiKey: "AIzaSyCIeSeTm_BO9meGKASqVVhyhnCFgbbraq0",
-        authDomain: "ofc-calculator.firebaseapp.com",
-        projectId: "ofc-calculator",
-        storageBucket: "ofc-calculator.firebasestorage.app",
-        messagingSenderId: "685316942347",
-        appId: "1:685316942347:web:9a6e1eb97d02cbc37c750e",
-        measurementId: "G-7KN67XC6GK", // Optional
-      ),
+  // ✅ Initialize Hive for storing diagram history locally
+  await Hive.initFlutter();
+  await Hive.openBox('diagram_history');
+
+  // ✅ Initialize Supabase
+  try {
+    await Supabase.initialize(
+      url: 'https://gmzlyasleyrsyphdasqk.supabase.co',
+      anonKey:
+          'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdtemx5YXNsZXlyc3lwaGRhc3FrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjE2MzU0NzIsImV4cCI6MjA3NzIxMTQ3Mn0.8YaT2clc4LRP6R-IpxGx5DC88ibNzlPXRP7sLYv6hVI',
     );
-  } else {
-    // Mobile platforms (Android/iOS)
-    await Firebase.initializeApp();
+    debugPrint("✅ Supabase initialized successfully.");
+  } catch (e) {
+    debugPrint("❌ Supabase initialization failed: $e");
   }
 
   runApp(const MyApp());
@@ -34,9 +31,12 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      debugShowCheckedModeBanner: false,
       title: 'OFC-CAL',
-      theme: ThemeData(primarySwatch: Colors.blue),
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorSchemeSeed: Colors.blue,
+      ),
       home: const LoginPage(),
     );
   }

@@ -1,16 +1,23 @@
 plugins {
     id("com.android.application")
     id("kotlin-android")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    // Flutter Gradle Plugin must be applied after Android + Kotlin
     id("dev.flutter.flutter-gradle-plugin")
-    // ✅ Add this plugin for Firebase (Google Services)
+    // Google Services (for Firebase/Supabase)
     id("com.google.gms.google-services")
 }
 
 android {
-    namespace = "com.niorixtech.ofc_cal"  // ✅ match Firebase package name
-    compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    namespace = "com.niorixtech.ofc_cal" // ✅ must match your Firebase package
+    compileSdk = 36  // ✅ Android 14
+
+    defaultConfig {
+        applicationId = "com.niorixtech.ofc_cal"
+        minSdk = flutter.minSdkVersion  // keep compatible with Flutter
+        targetSdk = 34
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
@@ -18,22 +25,31 @@ android {
     }
 
     kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_11.toString()
-    }
-
-    defaultConfig {
-        // ✅ Update your Firebase package name here too
-        applicationId = "com.niorixtech.ofc_cal"
-        minSdk = 21  // ✅ Recommended minimum for Firebase
-        targetSdk = flutter.targetSdkVersion
-        versionCode = flutter.versionCode
-        versionName = flutter.versionName
+        jvmTarget = "11"
     }
 
     buildTypes {
-        release {
+        debug {
+            // ✅ Use existing Flutter debug signing key
             signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
+        release {
+            // ✅ Temporarily use debug key for release too (until you add your own keystore)
+            signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+
+    // ✅ Fix for some Flutter plugin builds
+    buildFeatures {
+        viewBinding = true
     }
 }
 

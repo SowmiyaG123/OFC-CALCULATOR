@@ -4,6 +4,8 @@ import '../../utils/constants.dart';
 import '../auth/login_page.dart';
 import 'coupler_calculator.dart';
 import 'splitter_calculator.dart';
+import '../diagram/diagram_page.dart';
+import '../diagram/diagram_history_page.dart';
 
 class MainDashboard extends StatelessWidget {
   const MainDashboard({super.key});
@@ -11,6 +13,7 @@ class MainDashboard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      drawer: _buildSidebar(context),
       backgroundColor: AppConstants.backgroundColor,
       appBar: AppBar(
         title: const Text(
@@ -81,7 +84,6 @@ class MainDashboard extends StatelessWidget {
               ],
             ),
           ),
-
           // Calculator Grid - Only working calculators
           Expanded(
             child: Padding(
@@ -130,13 +132,63 @@ class MainDashboard extends StatelessWidget {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 20),
-                  const Padding(
-                    padding: EdgeInsets.all(16.0),
+                  const SizedBox(height: 24),
+                  Align(
+                    alignment: Alignment.center,
+                    child: ElevatedButton(
+                      child: const Text("Generate Diagram"),
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const OFCDiagramPage()),
+                        );
+                      },
+                    ),
                   ),
+                  const SizedBox(height: 16),
                 ],
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Drawer _buildSidebar(BuildContext context) {
+    return Drawer(
+      child: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          // Profile header (avatar, name, email placeholder)
+          UserAccountsDrawerHeader(
+            accountName:
+                Text('Your Name'), // TODO: connect to user data if available
+            accountEmail: Text('your.mail@example.com'),
+            currentAccountPicture: CircleAvatar(
+              child: Icon(Icons.person, size: 36),
+              backgroundColor: Colors.white,
+            ),
+            decoration: BoxDecoration(
+              color: AppConstants.primaryColor,
+            ),
+          ),
+          ListTile(
+            leading: Icon(Icons.download),
+            title: Text('Downloads'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => DiagramHistoryPage()),
+              );
+            },
+          ),
+          ListTile(
+            leading: Icon(Icons.dashboard_customize),
+            title: Text('Dashboard Home'),
+            onTap: () => Navigator.pop(context),
           ),
         ],
       ),

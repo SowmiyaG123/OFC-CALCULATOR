@@ -1,82 +1,87 @@
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/user.dart' as local_user;
 
 class AuthService {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final SupabaseClient _client = Supabase.instance.client;
 
-  /// 🔹 LOGIN using Firebase Auth
+  /// 🔹 LOGIN using Supabase Auth
   Future<local_user.User?> login(String email, String password) async {
     try {
-      UserCredential result = await _auth.signInWithEmailAndPassword(
-        email: email,
-        password: password,
+      final AuthResponse res = await _client.auth.signInWithPassword(
+        email: email.trim(),
+        password: password.trim(),
       );
 
-      User? firebaseUser = result.user;
-      if (firebaseUser != null) {
-        return local_user.User(
-          email: firebaseUser.email ?? '',
-          name: firebaseUser.displayName ?? 'User',
-          phone: firebaseUser.phoneNumber ?? '',
-        );
-      }
-    } on FirebaseAuthException catch (e) {
-      print('Login error: ${e.message}');
-      throw Exception(
-          e.message ?? 'Login failed'); // better to throw for UI feedback
+      final user = res.user;
+      if (user == null) throw Exception("Invalid credentials");
+
+      return local_user.User(
+        email: user.email ?? '',
+        name: user.userMetadata?['name'] ?? 'User',
+        phone: user.userMetadata?['phone'] ?? '',
+      );
+    } on AuthException catch (e) {
+      throw Exception(e.message);
+    } catch (e) {
+      throw Exception('Login failed: $e');
     }
-    return null;
   }
 
-  /// 🔹 REGISTER new user in Firebase
+  /// 🔹 REGISTER new user using Supabase Auth
   Future<void> registerUser(local_user.User user, String password) async {
     try {
-      UserCredential result = await _auth.createUserWithEmailAndPassword(
-        email: user.email,
-        password: password,
+      final AuthResponse res = await _client.auth.signUp(
+        email: user.email.trim(),
+        password: password.trim(),
+        data: {
+          'name': user.name.trim(),
+          'phone': user.phone.trim(),
+        },
       );
 
-      // Update display name for Firebase user
-      await result.user?.updateDisplayName(user.name);
-      await result.user?.reload();
-    } on FirebaseAuthException catch (e) {
-      if (e.code == 'email-already-in-use') {
-        throw Exception('User with this email already exists');
-      } else {
-        throw Exception(e.message ?? 'Registration failed');
+      if (res.user == null) {
+        throw Exception('Registration failed — please check details');
       }
+    } on AuthException catch (e) {
+      throw Exception(e.message);
+    } catch (e) {
+      throw Exception('Registration failed: $e');
     }
   }
 
-  /// 🔹 RESET PASSWORD via Firebase
+  /// 🔹 RESET PASSWORD via Supabase
   Future<void> resetPassword(String email) async {
     try {
-      await _auth.sendPasswordResetEmail(email: email);
-    } on FirebaseAuthException catch (e) {
-      print('Reset password error: ${e.message}');
-      throw Exception(e.message ?? 'Failed to send reset email');
+      await _client.auth.resetPasswordForEmail(email.trim());
+    } on AuthException catch (e) {
+      throw Exception(e.message);
+    } catch (e) {
+      throw Exception('Password reset failed: $e');
     }
   }
 
   /// 🔹 Get currently logged in user
   Future<local_user.User?> getCurrentUser() async {
-    User? firebaseUser = _auth.currentUser;
-
-    if (firebaseUser != null) {
+    final user = _client.auth.currentUser;
+    if (user != null) {
       return local_user.User(
-        email: firebaseUser.email ?? '',
-        name: firebaseUser.displayName ?? 'User',
-        phone: firebaseUser.phoneNumber ?? '',
+        email: user.email ?? '',
+        name: user.userMetadata?['name'] ?? 'User',
+        phone: user.userMetadata?['phone'] ?? '',
       );
     }
     return null;
   }
 
-  /// 🔹 Logout current user
+  /// 🔹 Logout user
   Future<void> logout() async {
-    await _auth.signOut();
+    try {
+      await _client.auth.signOut();
+    } catch (e) {
+      throw Exception('Logout failed: $e');
+    }
   }
 
-  /// 🔹 Check login state
-  bool get isLoggedIn => _auth.currentUser != null;
+  /// 🔹 Check if user logged in
+  bool get isLoggedIn => _client.auth.currentUser != null;
 }
