@@ -1,4 +1,7 @@
 // lib/screens/diagram/diagram_page.dart
+// Final professional OFC Diagram Generator — Unlimited Dynamic Nodes (Option C)
+// Integrates provided CouplerCalculator & SplitterCalculator logic.
+
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -7,1030 +10,1369 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:flutter/rendering.dart';
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:html' as html;
+import '../../html_stub.dart' if (dart.library.html) '../../html_real.dart'
+    as html;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-final List<Map<String, dynamic>> couplerOptions = [
-  {"type": "99/01", "dbmA": 18.35, "dbmB": 3.70},
-  {"type": "98/02", "dbmA": 18.30, "dbmB": 5.50},
-  {"type": "95/05", "dbmA": 18.23, "dbmB": 4.84},
-  {"type": "90/10", "dbmA": 17.92, "dbmB": 7.69},
-  {"type": "85/15", "dbmA": 17.77, "dbmB": 10.15},
-  {"type": "80/20", "dbmA": 17.58, "dbmB": 11.17},
-  {"type": "75/25", "dbmA": 17.11, "dbmB": 12.32},
-  {"type": "70/30", "dbmA": 16.91, "dbmB": 13.54},
-  {"type": "65/35", "dbmA": 16.67, "dbmB": 13.54},
-  {"type": "60/40", "dbmA": 16.24, "dbmB": 15.28},
-  {"type": "55/45", "dbmA": 15.77, "dbmB": 15.28},
-  {"type": "50/50", "dbmA": 15.51, "dbmB": 15.32},
-];
+// ---------------- Constants ----------------
+final double defaultHeadendDbm = 19.0;
+final double fiberAttenuationDbPerKm =
+    0.35; // dB per km attenuation (adjustable)
 
+// ---------------- Diagram Node ----------------
 class DiagramNode {
   int id;
   String label;
-  double signal;
-  double distance;
-  DiagramNode? left;
-  DiagramNode? right;
+  double signal; // dBm at node
+  double distance; // km to this node from parent
+  List<DiagramNode> children;
   int? parentId;
-  bool isCoupler;
-  String? couplerType;
-  String? branchLabel;
-  double? dbm;
+  String deviceType; // 'headend','coupler','splitter','leaf','pass'
+  String?
+      deviceConfig; // encoded metadata (section::ratio::value or section::split::value)
+  int outputPort;
+  double deviceLoss; // The actual loss value for this port
 
   DiagramNode({
     required this.id,
     required this.label,
     required this.signal,
     required this.distance,
-    this.left,
-    this.right,
+    List<DiagramNode>? children,
     this.parentId,
-    this.isCoupler = false,
-    this.couplerType,
-    this.branchLabel,
-    this.dbm,
-  });
+    this.deviceType = 'leaf',
+    this.deviceConfig,
+    this.outputPort = 0,
+    this.deviceLoss = 0.0,
+  }) : children = children ?? [];
 
-  bool get isLeaf => left == null && right == null;
+  bool get isLeaf => children.isEmpty;
+  bool get isCoupler => deviceType == 'coupler';
+  bool get isSplitter => deviceType == 'splitter';
+  bool get isHeadend => deviceType == 'headend';
 }
 
+// ---------------- CouplerCalculator (inlined from your file) ----------------
+class CouplerCalculator {
+  final double couplerValue;
+  CouplerCalculator(this.couplerValue);
+
+  final Map<double, Map<String, List<Map<String, double>>>> referenceData = {
+    1.0: {
+      "LOSS-15 50": [
+        {"ratio": 5, "val1": -11.5, "val2": 0.6},
+        {"ratio": 10, "val1": -9.5, "val2": 0.4},
+        {"ratio": 15, "val1": -7.5, "val2": 0.0},
+        {"ratio": 20, "val1": -6.5, "val2": -0.4},
+        {"ratio": 25, "val1": -5.5, "val2": -0.8},
+        {"ratio": 30, "val1": -4.8, "val2": -1.0},
+        {"ratio": 35, "val1": -4.0, "val2": -1.2},
+        {"ratio": 40, "val1": -3.5, "val2": -1.8},
+        {"ratio": 45, "val1": -3.0, "val2": -2.0},
+        {"ratio": 50, "val1": -2.5, "val2": -2.5},
+      ],
+      "LOSS-13 10": [
+        {"ratio": 5, "val1": -10.5, "val2": 0.8},
+        {"ratio": 10, "val1": -8.9, "val2": 0.6},
+        {"ratio": 15, "val1": -7.5, "val2": 0.3},
+        {"ratio": 20, "val1": -5.9, "val2": 0.1},
+        {"ratio": 25, "val1": -5.1, "val2": -0.2},
+        {"ratio": 30, "val1": -4.2, "val2": -0.5},
+        {"ratio": 35, "val1": -3.6, "val2": -0.8},
+        {"ratio": 40, "val1": -2.9, "val2": -1.2},
+        {"ratio": 45, "val1": -2.5, "val2": -1.6},
+        {"ratio": 50, "val1": -2.0, "val2": -2.0},
+      ],
+    },
+    2.0: {
+      "LOSS-15 50": [
+        {"ratio": 5, "val1": -10.5, "val2": 1.6},
+        {"ratio": 10, "val1": -8.5, "val2": 1.4},
+        {"ratio": 15, "val1": -6.5, "val2": 1.0},
+        {"ratio": 20, "val1": -5.5, "val2": 0.6},
+        {"ratio": 25, "val1": -4.5, "val2": 0.2},
+        {"ratio": 30, "val1": -3.8, "val2": 0.0},
+        {"ratio": 35, "val1": -3.0, "val2": -0.2},
+        {"ratio": 40, "val1": -2.5, "val2": -0.8},
+        {"ratio": 45, "val1": -2.0, "val2": -1.0},
+        {"ratio": 50, "val1": -1.5, "val2": -1.5},
+      ],
+      "LOSS-13 10": [
+        {"ratio": 5, "val1": -9.5, "val2": 1.8},
+        {"ratio": 10, "val1": -7.9, "val2": 1.6},
+        {"ratio": 15, "val1": -6.5, "val2": 1.3},
+        {"ratio": 20, "val1": -4.9, "val2": 1.1},
+        {"ratio": 25, "val1": -4.1, "val2": 0.8},
+        {"ratio": 30, "val1": -3.2, "val2": 0.5},
+        {"ratio": 35, "val1": -2.6, "val2": 0.2},
+        {"ratio": 40, "val1": -1.9, "val2": -0.2},
+        {"ratio": 45, "val1": -1.5, "val2": -0.6},
+        {"ratio": 50, "val1": -1.0, "val2": -1.0},
+      ],
+    },
+    10.0: {
+      "LOSS-15 50": [
+        {"ratio": 5, "val1": -2.5, "val2": 9.6},
+        {"ratio": 10, "val1": -0.5, "val2": 9.4},
+        {"ratio": 15, "val1": 1.5, "val2": 9.0},
+        {"ratio": 20, "val1": 2.5, "val2": 8.6},
+        {"ratio": 25, "val1": 3.5, "val2": 8.2},
+        {"ratio": 30, "val1": 4.2, "val2": 8.0},
+        {"ratio": 35, "val1": 5.0, "val2": 7.8},
+        {"ratio": 40, "val1": 5.5, "val2": 7.2},
+        {"ratio": 45, "val1": 6.0, "val2": 7.0},
+        {"ratio": 50, "val1": 6.5, "val2": 6.5},
+      ],
+      "LOSS-13 10": [
+        {"ratio": 5, "val1": -1.5, "val2": 9.8},
+        {"ratio": 10, "val1": 0.1, "val2": 9.6},
+        {"ratio": 15, "val1": 1.5, "val2": 9.3},
+        {"ratio": 20, "val1": 3.1, "val2": 9.1},
+        {"ratio": 25, "val1": 3.9, "val2": 8.8},
+        {"ratio": 30, "val1": 4.8, "val2": 8.5},
+        {"ratio": 35, "val1": 5.4, "val2": 8.2},
+        {"ratio": 40, "val1": 6.1, "val2": 7.8},
+        {"ratio": 45, "val1": 6.5, "val2": 7.4},
+        {"ratio": 50, "val1": 7.0, "val2": 7.0},
+      ],
+    },
+  };
+
+  List<Map<String, dynamic>> calculateLoss() {
+    final keys = referenceData.keys.toList()..sort();
+    double lower = keys.first;
+    double upper = keys.last;
+
+    for (int i = 0; i < keys.length - 1; i++) {
+      if (couplerValue >= keys[i] && couplerValue <= keys[i + 1]) {
+        lower = keys[i];
+        upper = keys[i + 1];
+        break;
+      }
+    }
+
+    double ratio = (couplerValue - lower) / (upper - lower);
+    final lowerData = referenceData[lower]!;
+    final upperData = referenceData[upper]!;
+
+    List<Map<String, dynamic>> result = [];
+
+    for (var section in ["LOSS-15 50", "LOSS-13 10"]) {
+      List<Map<String, double>> interpolated = [];
+      for (int i = 0; i < lowerData[section]!.length; i++) {
+        double val1 = lowerData[section]![i]["val1"]! +
+            (upperData[section]![i]["val1"]! -
+                    lowerData[section]![i]["val1"]!) *
+                ratio;
+        double val2 = lowerData[section]![i]["val2"]! +
+            (upperData[section]![i]["val2"]! -
+                    lowerData[section]![i]["val2"]!) *
+                ratio;
+        interpolated.add({
+          "ratio": lowerData[section]![i]["ratio"]!,
+          "val1": double.parse(val1.toStringAsFixed(2)),
+          "val2": double.parse(val2.toStringAsFixed(2)),
+        });
+      }
+      result.add({"section": section, "data": interpolated});
+    }
+
+    return result;
+  }
+}
+
+// ---------------- SplitterCalculator (inlined) ----------------
+class SplitterCalculator {
+  final double splitterValue;
+  SplitterCalculator(this.splitterValue);
+
+  final List<int> splits = [2, 4, 8, 16, 32, 64];
+
+  Map<String, List<Map<String, dynamic>>> calculateLoss() {
+    Map<String, List<Map<String, dynamic>>> result = {};
+    final loss1550 = [-3.6, -6.8, -10.0, -13.0, -16.0, -19.5];
+    final loss1310 = [-3.0, -6.4, -9.9, -13.2, -16.4, -19.4];
+
+    double adjust = splitterValue - 1.0;
+
+    result["LOSS-15 50"] = List.generate(splits.length,
+        (i) => {'split': splits[i], 'value': loss1550[i] + adjust});
+    result["LOSS-13 10"] = List.generate(splits.length,
+        (i) => {'split': splits[i], 'value': loss1310[i] + adjust});
+
+    return result;
+  }
+}
+
+// ---------------- OFC Diagram Page ----------------
 class OFCDiagramPage extends StatefulWidget {
-  const OFCDiagramPage({super.key});
+  const OFCDiagramPage({Key? key}) : super(key: key);
   @override
   State<OFCDiagramPage> createState() => _OFCDiagramPageState();
 }
 
 class _OFCDiagramPageState extends State<OFCDiagramPage> {
-  // Repaint boundary key (used to capture the diagram)
   final GlobalKey repaintKey = GlobalKey();
-
-  final TextEditingController headendCtrl =
+  final TextEditingController _headendNameCtrl =
       TextEditingController(text: "EDFA/PON/TR");
-  final TextEditingController headendDbmCtrl =
-      TextEditingController(text: "19.0");
+  final TextEditingController _headendDbmCtrl =
+      TextEditingController(text: defaultHeadendDbm.toString());
 
-  DiagramNode? rootNode;
-  int nodeId = 0;
-
-  String headendName = "EDFA/PON/TR";
-  double headendDbm = 19.0;
-
-  // base canvas sizes (expand as tree grows)
-  double baseDiagramWidth = 1200;
-  double baseDiagramHeight = 900;
-
+  DiagramNode? root;
+  int _nodeCounter = 0;
   final SupabaseClient _supabase = Supabase.instance.client;
 
   @override
   void initState() {
     super.initState();
-    headendName = headendCtrl.text;
-    headendDbm = double.tryParse(headendDbmCtrl.text) ?? 19.0;
-    rootNode = DiagramNode(
-      id: nodeId++,
-      label: headendName,
-      signal: headendDbm,
-      distance: 0,
-      isCoupler: false,
-    );
-    // Ensure our history box exists
+    _initRoot();
     Hive.openBox('diagram_history');
+    Hive.openBox('diagram_downloads');
   }
 
-  void updateHeadend() {
-    setState(() {
-      headendName = headendCtrl.text.isEmpty ? "EDFA/PON/TR" : headendCtrl.text;
-      headendDbm = double.tryParse(headendDbmCtrl.text) ?? 19.0;
-      if (rootNode != null) {
-        rootNode!.label = headendName;
-        rootNode!.signal = headendDbm;
+  void _initRoot() {
+    root = DiagramNode(
+      id: _nodeCounter++,
+      label: _headendNameCtrl.text,
+      signal: double.tryParse(_headendDbmCtrl.text) ?? defaultHeadendDbm,
+      distance: 0,
+      deviceType: 'headend',
+    );
+  }
+
+  // ---------- recalc function using deviceConfig + calculators ----------
+  void _recalculate(DiagramNode node) {
+    if (node.children.isEmpty) return;
+
+    if (node.isCoupler && node.deviceConfig != null) {
+      // format: "SECTION::RATIO::COUPLERVALUE"
+      final parts = node.deviceConfig!.split('::');
+      final section = parts.isNotEmpty ? parts[0] : 'LOSS-15 50';
+      final ratio = parts.length > 1 ? int.tryParse(parts[1]) ?? 50 : 50;
+      final couplerVal =
+          parts.length > 2 ? double.tryParse(parts[2]) ?? 1.0 : 1.0;
+
+      final calc = CouplerCalculator(couplerVal);
+      final all = calc.calculateLoss();
+      final sec =
+          all.firstWhere((s) => s['section'] == section, orElse: () => all[0]);
+      final data = (sec['data'] as List).cast<Map<String, dynamic>>();
+      final entry =
+          data.firstWhere((e) => e['ratio'] == ratio, orElse: () => data.last);
+      final p1 = (entry['val1'] as num).toDouble();
+      final p2 = (entry['val2'] as num).toDouble();
+
+      final losses = [p1, p2];
+      for (int i = 0; i < node.children.length && i < 2; i++) {
+        final child = node.children[i];
+        final dLoss = child.distance * fiberAttenuationDbPerKm;
+        child.deviceLoss = losses[i].abs();
+        child.signal = node.signal + losses[i] - dLoss;
+        child.outputPort = i;
+        _recalculate(child);
       }
+    } else if (node.isSplitter && node.deviceConfig != null) {
+      // format: "SECTION::SPLIT::SPLITTERVALUE"
+      final parts = node.deviceConfig!.split('::');
+      final section = parts.isNotEmpty ? parts[0] : 'LOSS-15 50';
+      final split = parts.length > 1 ? int.tryParse(parts[1]) ?? 2 : 2;
+      final splitterVal =
+          parts.length > 2 ? double.tryParse(parts[2]) ?? 1.0 : 1.0;
+
+      final calc = SplitterCalculator(splitterVal);
+      final all = calc.calculateLoss();
+      final sec = all[section]!;
+      final entry =
+          sec.firstWhere((e) => e['split'] == split, orElse: () => sec.first);
+      final perLoss = (entry['value'] as num).toDouble();
+
+      for (int i = 0; i < node.children.length; i++) {
+        final child = node.children[i];
+        final dLoss = child.distance * fiberAttenuationDbPerKm;
+        child.deviceLoss = perLoss.abs();
+        child.signal = node.signal + perLoss - dLoss;
+        child.outputPort = i;
+        _recalculate(child);
+      }
+    } else {
+      // pass-through (only distance loss)
+      for (final child in node.children) {
+        final dLoss = child.distance * fiberAttenuationDbPerKm;
+        child.signal = node.signal - dLoss;
+        _recalculate(child);
+      }
+    }
+  }
+
+  void _updateHeadend() {
+    setState(() {
+      root!.label =
+          _headendNameCtrl.text.isEmpty ? 'EDFA/PON/TR' : _headendNameCtrl.text;
+      root!.signal = double.tryParse(_headendDbmCtrl.text) ?? defaultHeadendDbm;
+      _recalculate(root!);
     });
   }
 
-  // show dialog to add or extend coupler on a parent node
-  void _addOrExtendCoupler(DiagramNode parent) async {
-    String selectedType = couplerOptions[0]["type"] as String;
-    double dbmA = couplerOptions[0]["dbmA"] as double;
-    double dbmB = couplerOptions[0]["dbmB"] as double;
-    final TextEditingController signalCtrl =
-        TextEditingController(text: parent.signal.toString());
-    final TextEditingController distanceCtrl =
-        TextEditingController(text: parent.distance.toString());
+  // ---------- Add N-ary generic children ----------
+  Future<void> _addNChildren(DiagramNode parent) async {
+    final countCtrl = TextEditingController(text: '2');
+    final distanceCtrl = TextEditingController(text: '0.5');
+    final labelCtrl = TextEditingController(text: 'Node');
 
     await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(
-            '${parent.isCoupler ? "Extend" : "Add Coupler"} at ${parent.label}'),
+        title: const Text('Add children (N-ary)'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            DropdownButtonFormField<String>(
-              value: selectedType,
-              onChanged: (val) {
-                if (val == null) return;
-                final sel =
-                    couplerOptions.firstWhere((opt) => opt["type"] == val);
-                setState(() {
-                  selectedType = sel["type"] as String;
-                  dbmA = sel["dbmA"] as double;
-                  dbmB = sel["dbmB"] as double;
-                });
-              },
-              items: couplerOptions.map((opt) {
-                return DropdownMenuItem<String>(
-                  value: opt["type"] as String,
-                  child:
-                      Text('${opt["type"]} (${opt["dbmA"]}, ${opt["dbmB"]})'),
-                );
-              }).toList(),
-            ),
             TextField(
-              controller: signalCtrl,
-              keyboardType: TextInputType.number,
-              decoration:
-                  const InputDecoration(labelText: 'Input Signal (dBm)'),
-            ),
+                controller: countCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Count')),
+            const SizedBox(height: 8),
             TextField(
-              controller: distanceCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Distance (km)'),
-            ),
+                controller: distanceCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Distance (km)')),
+            const SizedBox(height: 8),
+            TextField(
+                controller: labelCtrl,
+                decoration: const InputDecoration(labelText: 'Base label')),
           ],
         ),
         actions: [
           TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
             onPressed: () {
-              final double distance = double.tryParse(distanceCtrl.text) ?? 0.0;
               setState(() {
-                final double dbmLeft = dbmA;
-                final double dbmRight = dbmB;
-
-                // Always create left and right children for the selected sequence
-                parent.left = DiagramNode(
-                  id: nodeId++,
-                  label: '${selectedType.split('/')[0]}',
-                  signal: dbmLeft,
-                  distance: distance,
-                  parentId: parent.id,
-                  isCoupler: true,
-                  couplerType: selectedType,
-                  branchLabel: 'A',
-                  dbm: dbmLeft,
-                );
-                parent.right = DiagramNode(
-                  id: nodeId++,
-                  label: '${selectedType.split('/')[1]}',
-                  signal: dbmRight,
-                  distance: distance,
-                  parentId: parent.id,
-                  isCoupler: true,
-                  couplerType: selectedType,
-                  branchLabel: 'B',
-                  dbm: dbmRight,
-                );
-
-                // If user set a custom input signal, update parent's signal if they changed
-                final inputSignal = double.tryParse(signalCtrl.text);
-                if (inputSignal != null) {
-                  parent.signal = inputSignal;
+                final cnt = (int.tryParse(countCtrl.text) ?? 2).clamp(1, 256);
+                final dist = double.tryParse(distanceCtrl.text) ?? 0.5;
+                final base = labelCtrl.text.isEmpty ? 'Node' : labelCtrl.text;
+                final List<DiagramNode> ch = [];
+                for (int i = 0; i < cnt; i++) {
+                  ch.add(DiagramNode(
+                    id: _nodeCounter++,
+                    label: '$base ${i + 1}',
+                    signal: parent.signal - (dist * fiberAttenuationDbPerKm),
+                    distance: dist,
+                    parentId: parent.id,
+                    deviceType: 'leaf',
+                    outputPort: i,
+                  ));
                 }
-                parent.distance = distance;
+                parent.children = ch;
+                parent.deviceType =
+                    parent.isHeadend ? parent.deviceType : 'pass';
+                parent.deviceConfig = null;
+                _recalculate(root!);
               });
-              Navigator.pop(context);
+              Navigator.pop(ctx);
             },
-            child: const Text("Confirm"),
-          ),
+            child: const Text('Add'),
+          )
         ],
       ),
     );
   }
 
-  // find node by id
-  DiagramNode? _findNodeById(DiagramNode? node, int id) {
-    if (node == null) return null;
-    if (node.id == id) return node;
-    return _findNodeById(node.left, id) ?? _findNodeById(node.right, id);
-  }
-
-  // remove a subtree by id (search parent and null the proper child)
-  bool _removeNodeById(DiagramNode? current, int targetId) {
-    if (current == null) return false;
-    if (current.left != null && current.left!.id == targetId) {
-      setState(() {
-        current.left = null;
-      });
-      return true;
+  // ---------- Add Coupler (N-port, generalized) ----------
+  Future<void> _addCoupler(DiagramNode parent) async {
+    if (parent.children.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Remove existing branch before adding device')));
+      return;
     }
-    if (current.right != null && current.right!.id == targetId) {
-      setState(() {
-        current.right = null;
-      });
-      return true;
-    }
-    if (_removeNodeById(current.left, targetId)) return true;
-    if (_removeNodeById(current.right, targetId)) return true;
-    return false;
-  }
-
-  // edit coupler node data
-  Future<void> _editNode(DiagramNode node) async {
-    String selectedType =
-        node.couplerType ?? couplerOptions[0]["type"] as String;
-    double dbmA = node.dbm ?? (couplerOptions[0]["dbmA"] as double);
-    double dbmB = dbmA; // will update when selection changes
-    final TextEditingController distanceCtrl =
-        TextEditingController(text: node.distance.toString());
-    final TextEditingController signalCtrl =
-        TextEditingController(text: node.signal.toString());
+    final couplerValCtrl = TextEditingController(text: '1.0');
+    final portCountCtrl = TextEditingController(text: '2');
+    final distanceCtrl = TextEditingController(text: '0.5');
+    String section = 'LOSS-15 50';
+    int ratio = 50;
 
     await showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text("Edit Coupler"),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            DropdownButtonFormField<String>(
-              value: selectedType,
-              onChanged: (val) {
-                if (val == null) return;
-                final sel =
-                    couplerOptions.firstWhere((opt) => opt["type"] == val);
-                setState(() {
-                  selectedType = sel["type"] as String;
-                  dbmA = sel["dbmA"] as double;
-                  dbmB = sel["dbmB"] as double;
-                });
-              },
-              items: couplerOptions.map((opt) {
-                return DropdownMenuItem<String>(
-                  value: opt["type"] as String,
-                  child:
-                      Text('${opt["type"]} (${opt["dbmA"]}, ${opt["dbmB"]})'),
-                );
-              }).toList(),
-            ),
-            TextField(
-              controller: signalCtrl,
-              keyboardType: TextInputType.number,
-              decoration:
-                  const InputDecoration(labelText: 'Displayed signal (dBm)'),
-            ),
-            TextField(
-              controller: distanceCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Distance (km)'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              setState(() {
-                node.couplerType = selectedType;
-                node.dbm = double.tryParse(signalCtrl.text) ?? node.dbm;
-                node.signal = node.dbm ?? node.signal;
-                node.distance =
-                    double.tryParse(distanceCtrl.text) ?? node.distance;
-                // update children dBm if present
-                if (node.left != null || node.right != null) {
-                  final sel = couplerOptions
-                      .firstWhere((opt) => opt["type"] == selectedType);
-                  final leftDbm = sel["dbmA"] as double;
-                  final rightDbm = sel["dbmB"] as double;
-                  if (node.left != null) {
-                    node.left!.label = selectedType.split('/')[0];
-                    node.left!.dbm = leftDbm;
-                    node.left!.signal = leftDbm;
-                  }
-                  if (node.right != null) {
-                    node.right!.label = selectedType.split('/')[1];
-                    node.right!.dbm = rightDbm;
-                    node.right!.signal = rightDbm;
-                  }
-                }
-              });
-              Navigator.pop(context);
-            },
-            child: const Text("Save"),
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setInner) {
+        return AlertDialog(
+          title: const Text('Add Coupler'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                  controller: couplerValCtrl,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration:
+                      const InputDecoration(labelText: 'Coupler value')),
+              const SizedBox(height: 8),
+              TextField(
+                  controller: portCountCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                      labelText: 'Number of ports (2/4/6/8/16)')),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: section,
+                items: const [
+                  DropdownMenuItem(
+                      value: 'LOSS-15 50', child: Text('LOSS-15 50')),
+                  DropdownMenuItem(
+                      value: 'LOSS-13 10', child: Text('LOSS-13 10'))
+                ],
+                onChanged: (v) => setInner(() => section = v ?? section),
+                decoration: const InputDecoration(labelText: 'Section'),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<int>(
+                value: ratio,
+                items: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+                    .map((r) => DropdownMenuItem(value: r, child: Text('$r')))
+                    .toList(),
+                onChanged: (v) => setInner(() => ratio = v ?? ratio),
+                decoration: const InputDecoration(labelText: 'Ratio'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                  controller: distanceCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration:
+                      const InputDecoration(labelText: 'Distance (km)')),
+            ],
           ),
-        ],
-      ),
-    );
-  }
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () {
+                setState(() {
+                  final couplerVal =
+                      double.tryParse(couplerValCtrl.text) ?? 1.0;
+                  final dist = double.tryParse(distanceCtrl.text) ?? 0.5;
+                  final portCount = [2, 4, 6, 8, 16]
+                          .contains(int.tryParse(portCountCtrl.text ?? '2'))
+                      ? int.parse(portCountCtrl.text)
+                      : 2;
 
-  // bottom sheet / options when tapping a block
-  void _onBlockTap(int nodeId) {
-    final tapped = _findNodeById(rootNode, nodeId);
-    if (tapped == null) return;
+                  final calc = CouplerCalculator(couplerVal);
+                  final list = calc.calculateLoss();
+                  final sec = list.firstWhere((s) => s['section'] == section,
+                      orElse: () => list[0]);
+                  final data =
+                      (sec['data'] as List).cast<Map<String, dynamic>>();
+                  final entry = data.firstWhere((e) => e['ratio'] == ratio,
+                      orElse: () => data.last);
+                  final v1 = (entry['val1'] as num).toDouble();
+                  final v2 = (entry['val2'] as num).toDouble();
 
-    if (tapped.isLeaf) {
-      _addOrExtendCoupler(tapped);
-      return;
-    }
-
-    // non-leaf show options
-    showModalBottomSheet(
-      context: context,
-      builder: (_) => SafeArea(
-        child: Wrap(
-          children: [
-            ListTile(
-              leading: const Icon(Icons.playlist_add),
-              title: const Text('Add/Extend at a leaf under this node'),
-              onTap: () {
-                Navigator.pop(context);
-                DiagramNode? leaf = tapped;
-                while (leaf != null && !leaf.isLeaf) {
-                  leaf = leaf.left ?? leaf.right;
-                }
-                if (leaf != null) _addOrExtendCoupler(leaf);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.edit),
-              title: const Text('Edit this coupler'),
-              onTap: () {
-                Navigator.pop(context);
-                _editNode(tapped);
-              },
-            ),
-            if (tapped.parentId != null)
-              ListTile(
-                leading: const Icon(Icons.delete_forever, color: Colors.red),
-                title: const Text('Remove this coupler subtree',
-                    style: TextStyle(color: Colors.red)),
-                onTap: () {
-                  Navigator.pop(context);
-                  final removed = _removeNodeById(rootNode, tapped.id);
-                  if (!removed) {
-                    // was root
-                    if (rootNode != null && rootNode!.id == tapped.id) {
-                      setState(() {
-                        rootNode = DiagramNode(
-                          id: nodeId++,
-                          label: headendName,
-                          signal: headendDbm,
-                          distance: 0,
-                          isCoupler: false,
-                        );
-                      });
+                  // Calculate losses for N ports: distribute v1 and v2 across all
+                  List<double> losses = [];
+                  if (portCount == 2) {
+                    losses = [v1, v2];
+                  } else {
+                    final average = ((v1 + v2) / 2);
+                    for (int i = 0; i < portCount; i++) {
+                      losses.add(average);
                     }
                   }
-                },
-              ),
-            ListTile(
-              leading: const Icon(Icons.close),
-              title: const Text('Close'),
-              onTap: () => Navigator.pop(context),
-            ),
+
+                  parent.children = List.generate(
+                      portCount,
+                      (i) => DiagramNode(
+                            id: _nodeCounter++,
+                            label: 'Port ${i + 1}',
+                            signal: parent.signal +
+                                losses[i] -
+                                (dist * fiberAttenuationDbPerKm),
+                            distance: dist,
+                            parentId: parent.id,
+                            deviceType: 'leaf',
+                            outputPort: i,
+                            deviceLoss: losses[i].abs(),
+                          ));
+                  parent.deviceType = 'coupler';
+                  parent.deviceConfig =
+                      '$section::${ratio.toString()}::${couplerVal.toStringAsFixed(3)}::N$portCount';
+                  _recalculate(root!);
+                });
+                Navigator.pop(ctx);
+              },
+              child: const Text('Add Coupler'),
+            )
           ],
-        ),
-      ),
+        );
+      }),
     );
   }
 
-  void _onHeaderTap() {
-    if (rootNode != null && rootNode!.isLeaf) {
-      _addOrExtendCoupler(rootNode!);
+  // ---------- Add Splitter (dropdown) ----------
+  Future<void> _addSplitter(DiagramNode parent) async {
+    if (parent.children.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Remove existing branch before adding device')));
+      return;
+    }
+    final splitterValCtrl = TextEditingController(text: '1.0');
+    final distanceCtrl = TextEditingController(text: '0.5');
+    String section = 'LOSS-15 50';
+    int split = 2;
+    final splits = [2, 4, 8, 16, 32, 64];
+
+    await showDialog(
+        context: context,
+        builder: (ctx) => StatefulBuilder(builder: (ctx, setInner) {
+              return AlertDialog(
+                title: const Text('Add Splitter'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                        controller: splitterValCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        decoration:
+                            const InputDecoration(labelText: 'Splitter value')),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      value: section,
+                      items: const [
+                        DropdownMenuItem(
+                            value: 'LOSS-15 50', child: Text('LOSS-15 50')),
+                        DropdownMenuItem(
+                            value: 'LOSS-13 10', child: Text('LOSS-13 10'))
+                      ],
+                      onChanged: (v) => setInner(() => section = v ?? section),
+                      decoration: const InputDecoration(labelText: 'Section'),
+                    ),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<int>(
+                      value: split,
+                      items: splits
+                          .map((s) =>
+                              DropdownMenuItem(value: s, child: Text('1x$s')))
+                          .toList(),
+                      onChanged: (v) => setInner(() => split = v ?? split),
+                      decoration: const InputDecoration(labelText: 'Split'),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                        controller: distanceCtrl,
+                        keyboardType: TextInputType.number,
+                        decoration:
+                            const InputDecoration(labelText: 'Distance (km)')),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Cancel')),
+                  ElevatedButton(
+                    onPressed: () {
+                      setState(() {
+                        final splitterVal =
+                            double.tryParse(splitterValCtrl.text) ?? 1.0;
+                        final dist = double.tryParse(distanceCtrl.text) ?? 0.5;
+                        final calc = SplitterCalculator(splitterVal);
+                        final map = calc.calculateLoss();
+                        final sec = map[section]!;
+                        final entry = sec.firstWhere((e) => e['split'] == split,
+                            orElse: () => sec.first);
+                        final perLoss = (entry['value'] as num).toDouble();
+
+                        parent.children = List.generate(
+                            split,
+                            (i) => DiagramNode(
+                                  id: _nodeCounter++,
+                                  label: 'Port ${i + 1}',
+                                  signal: parent.signal +
+                                      perLoss -
+                                      (dist * fiberAttenuationDbPerKm),
+                                  distance: dist,
+                                  parentId: parent.id,
+                                  deviceType: 'leaf',
+                                  outputPort: i,
+                                  deviceLoss: perLoss.abs(),
+                                ));
+
+                        parent.deviceType = 'splitter';
+                        parent.deviceConfig =
+                            '$section::${split.toString()}::${splitterVal.toStringAsFixed(3)}';
+                        _recalculate(root!);
+                      });
+                      Navigator.pop(ctx);
+                    },
+                    child: const Text('Add Splitter'),
+                  )
+                ],
+              );
+            }));
+  }
+
+  // ---------- Edit Node / Device ----------
+  Future<void> _editNode(DiagramNode node) async {
+    if (node.isCoupler) {
+      // parse config
+      String section = 'LOSS-15 50';
+      int ratio = 50;
+      double couplerVal = 1.0;
+      double childDist =
+          node.children.isNotEmpty ? node.children[0].distance : 0.5;
+
+      if (node.deviceConfig != null) {
+        final p = node.deviceConfig!.split('::');
+        if (p.isNotEmpty) section = p[0];
+        if (p.length > 1) ratio = int.tryParse(p[1]) ?? ratio;
+        if (p.length > 2) couplerVal = double.tryParse(p[2]) ?? couplerVal;
+      }
+
+      final couplerCtrl = TextEditingController(text: couplerVal.toString());
+      final distanceCtrl = TextEditingController(text: childDist.toString());
+      String sSection = section;
+      int sRatio = ratio;
+
+      await showDialog(
+          context: context,
+          builder: (ctx) => StatefulBuilder(builder: (ctx, setInner) {
+                return AlertDialog(
+                  title: const Text('Edit Coupler'),
+                  content: Column(mainAxisSize: MainAxisSize.min, children: [
+                    TextField(
+                        controller: couplerCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        decoration:
+                            const InputDecoration(labelText: 'Coupler value')),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                        value: sSection,
+                        items: const [
+                          DropdownMenuItem(
+                              value: 'LOSS-15 50', child: Text('LOSS-15 50')),
+                          DropdownMenuItem(
+                              value: 'LOSS-13 10', child: Text('LOSS-13 10'))
+                        ],
+                        onChanged: (v) =>
+                            setInner(() => sSection = v ?? sSection),
+                        decoration:
+                            const InputDecoration(labelText: 'Section')),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<int>(
+                        value: sRatio,
+                        items: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+                            .map((r) =>
+                                DropdownMenuItem(value: r, child: Text('$r')))
+                            .toList(),
+                        onChanged: (v) => setInner(() => sRatio = v ?? sRatio),
+                        decoration: const InputDecoration(labelText: 'Ratio')),
+                    const SizedBox(height: 8),
+                    TextField(
+                        controller: distanceCtrl,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                            labelText: 'Distance (km) for outputs')),
+                  ]),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('Cancel')),
+                    ElevatedButton(
+                        onPressed: () {
+                          setState(() {
+                            final newVal =
+                                double.tryParse(couplerCtrl.text) ?? couplerVal;
+                            final newDist =
+                                double.tryParse(distanceCtrl.text) ?? childDist;
+                            final calc = CouplerCalculator(newVal);
+                            final list = calc.calculateLoss();
+                            final sec = list.firstWhere(
+                                (s) => s['section'] == sSection,
+                                orElse: () => list[0]);
+                            final data = (sec['data'] as List)
+                                .cast<Map<String, dynamic>>();
+                            final entry = data.firstWhere(
+                                (e) => e['ratio'] == sRatio,
+                                orElse: () => data.last);
+                            final v1 = (entry['val1'] as num).toDouble();
+                            final v2 = (entry['val2'] as num).toDouble();
+
+                            // update children count to 2 if necessary
+                            if (node.children.length < 2) {
+                              node.children = [
+                                DiagramNode(
+                                    id: _nodeCounter++,
+                                    label: 'Port 1',
+                                    signal: node.signal +
+                                        v1 -
+                                        (newDist * fiberAttenuationDbPerKm),
+                                    distance: newDist,
+                                    parentId: node.id,
+                                    deviceType: 'leaf',
+                                    outputPort: 0,
+                                    deviceLoss: v1.abs()),
+                                DiagramNode(
+                                    id: _nodeCounter++,
+                                    label: 'Port 2',
+                                    signal: node.signal +
+                                        v2 -
+                                        (newDist * fiberAttenuationDbPerKm),
+                                    distance: newDist,
+                                    parentId: node.id,
+                                    deviceType: 'leaf',
+                                    outputPort: 1,
+                                    deviceLoss: v2.abs()),
+                              ];
+                            } else {
+                              node.children[0].distance = newDist;
+                              node.children[0].deviceLoss = v1.abs();
+                              node.children[0].signal = node.signal +
+                                  v1 -
+                                  (newDist * fiberAttenuationDbPerKm);
+                              node.children[1].distance = newDist;
+                              node.children[1].deviceLoss = v2.abs();
+                              node.children[1].signal = node.signal +
+                                  v2 -
+                                  (newDist * fiberAttenuationDbPerKm);
+                            }
+                            node.deviceConfig =
+                                '$sSection::${sRatio.toString()}::${newVal.toStringAsFixed(3)}';
+                            _recalculate(root!);
+                          });
+                          Navigator.pop(ctx);
+                        },
+                        child: const Text('Save'))
+                  ],
+                );
+              }));
+    } else if (node.isSplitter) {
+      String section = 'LOSS-15 50';
+      int split = 2;
+      double splitterVal = 1.0;
+      double childDist =
+          node.children.isNotEmpty ? node.children[0].distance : 0.5;
+
+      if (node.deviceConfig != null) {
+        final p = node.deviceConfig!.split('::');
+        if (p.isNotEmpty) section = p[0];
+        if (p.length > 1) split = int.tryParse(p[1]) ?? split;
+        if (p.length > 2) splitterVal = double.tryParse(p[2]) ?? splitterVal;
+      }
+
+      final splitterCtrl = TextEditingController(text: splitterVal.toString());
+      final distanceCtrl = TextEditingController(text: childDist.toString());
+      int sSplit = split;
+      String sSection = section;
+      final splits = [2, 4, 8, 16, 32, 64];
+
+      await showDialog(
+          context: context,
+          builder: (ctx) => StatefulBuilder(builder: (ctx, setInner) {
+                return AlertDialog(
+                  title: const Text('Edit Splitter'),
+                  content: Column(mainAxisSize: MainAxisSize.min, children: [
+                    TextField(
+                        controller: splitterCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        decoration:
+                            const InputDecoration(labelText: 'Splitter value')),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                        value: sSection,
+                        items: const [
+                          DropdownMenuItem(
+                              value: 'LOSS-15 50', child: Text('LOSS-15 50')),
+                          DropdownMenuItem(
+                              value: 'LOSS-13 10', child: Text('LOSS-13 10'))
+                        ],
+                        onChanged: (v) =>
+                            setInner(() => sSection = v ?? sSection),
+                        decoration:
+                            const InputDecoration(labelText: 'Section')),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<int>(
+                        value: sSplit,
+                        items: splits
+                            .map((s) =>
+                                DropdownMenuItem(value: s, child: Text('1x$s')))
+                            .toList(),
+                        onChanged: (v) => setInner(() => sSplit = v ?? sSplit),
+                        decoration: const InputDecoration(labelText: 'Split')),
+                    const SizedBox(height: 8),
+                    TextField(
+                        controller: distanceCtrl,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                            labelText: 'Distance (km) for outputs')),
+                  ]),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('Cancel')),
+                    ElevatedButton(
+                        onPressed: () {
+                          setState(() {
+                            final newVal = double.tryParse(splitterCtrl.text) ??
+                                splitterVal;
+                            final newDist =
+                                double.tryParse(distanceCtrl.text) ?? childDist;
+                            final calc = SplitterCalculator(newVal);
+                            final all = calc.calculateLoss();
+                            final sec = all[sSection]!;
+                            final entry = sec.firstWhere(
+                                (e) => e['split'] == sSplit,
+                                orElse: () => sec.first);
+                            final per = (entry['value'] as num).toDouble();
+
+                            // recreate children if count differs
+                            if (node.children.length != sSplit) {
+                              node.children = List.generate(
+                                  sSplit,
+                                  (i) => DiagramNode(
+                                        id: _nodeCounter++,
+                                        label: 'Port ${i + 1}',
+                                        signal: node.signal +
+                                            per -
+                                            (newDist * fiberAttenuationDbPerKm),
+                                        distance: newDist,
+                                        parentId: node.id,
+                                        deviceType: 'leaf',
+                                        outputPort: i,
+                                        deviceLoss: per.abs(),
+                                      ));
+                            } else {
+                              for (int i = 0; i < node.children.length; i++) {
+                                node.children[i].distance = newDist;
+                                node.children[i].deviceLoss = per.abs();
+                                node.children[i].signal = node.signal +
+                                    per -
+                                    (newDist * fiberAttenuationDbPerKm);
+                              }
+                            }
+
+                            node.deviceConfig =
+                                '$sSection::${sSplit.toString()}::${newVal.toStringAsFixed(3)}';
+                            _recalculate(root!);
+                          });
+                          Navigator.pop(ctx);
+                        },
+                        child: const Text('Save'))
+                  ],
+                );
+              }));
     } else {
-      _onBlockTap(rootNode!.id);
+      // generic node editing
+      final labelCtrl = TextEditingController(text: node.label);
+      final distCtrl = TextEditingController(text: node.distance.toString());
+      await showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+                title: const Text('Edit Node'),
+                content: Column(mainAxisSize: MainAxisSize.min, children: [
+                  TextField(
+                      controller: labelCtrl,
+                      decoration: const InputDecoration(labelText: 'Label')),
+                  const SizedBox(height: 8),
+                  TextField(
+                      controller: distCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration:
+                          const InputDecoration(labelText: 'Distance (km)')),
+                ]),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Cancel')),
+                  ElevatedButton(
+                      onPressed: () {
+                        setState(() {
+                          node.label = labelCtrl.text;
+                          node.distance =
+                              double.tryParse(distCtrl.text) ?? node.distance;
+                          _recalculate(root!);
+                        });
+                        Navigator.pop(ctx);
+                      },
+                      child: const Text('Save'))
+                ],
+              ));
     }
   }
 
-  /// collects positions for overlay transparent hitboxes and action buttons
-  List<_BlockOverlayInfo> _collectBlockPositions(DiagramNode node, double x,
-      double y, double dx, double dy, double blockWidth, double blockHeight) {
-    List<_BlockOverlayInfo> overlays = [];
-    overlays.add(_BlockOverlayInfo(
-        id: node.id,
-        x: x,
-        y: y,
-        width: blockWidth,
-        height: blockHeight,
-        parentId: node.parentId,
-        nodeRef: node));
-    if (node.left != null) {
-      overlays.addAll(_collectBlockPositions(
-          node.left!, x - dx, y + dy, dx / 1.5, dy, blockWidth, blockHeight));
+  // ---------- Delete Entire Branch (only allowed) ----------
+  void _deleteBranch(DiagramNode node) {
+    if (node.parentId == null) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Cannot delete headend')));
+      return;
     }
-    if (node.right != null) {
-      overlays.addAll(_collectBlockPositions(
-          node.right!, x + dx, y + dy, dx / 1.5, dy, blockWidth, blockHeight));
-    }
-    return overlays;
+    showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              title: const Text('Delete Branch?'),
+              content: Text(
+                  'Delete "${node.label}" and ${_countDescendants(node)} descendant(s)? Note: single-leaf deletion not allowed.'),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('Cancel')),
+                ElevatedButton(
+                    onPressed: () {
+                      setState(() {
+                        final parent = _findNode(root, node.parentId!);
+                        if (parent != null) {
+                          parent.children = parent.children
+                              .where((c) => c.id != node.id)
+                              .toList();
+                          if (parent.children.isEmpty && !parent.isHeadend) {
+                            parent.deviceType = 'leaf';
+                            parent.deviceConfig = null;
+                          }
+                          _recalculate(root!);
+                        }
+                      });
+                      Navigator.pop(ctx);
+                    },
+                    child: const Text('Delete'))
+              ],
+            ));
   }
 
-  Future<void> saveDiagram() async {
+  int _countDescendants(DiagramNode node) {
+    int cnt = node.children.length;
+    for (final c in node.children) cnt += _countDescendants(c);
+    return cnt;
+  }
+
+  DiagramNode? _findNode(DiagramNode? n, int id) {
+    if (n == null) return null;
+    if (n.id == id) return n;
+    for (final c in n.children) {
+      final f = _findNode(c, id);
+      if (f != null) return f;
+    }
+    return null;
+  }
+
+  // ---------- Node option sheet ----------
+  void _showNodeOptions(DiagramNode node) {
+    showModalBottomSheet(
+        context: context,
+        shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        builder: (ctx) => SafeArea(
+                child: Wrap(children: [
+              ListTile(
+                  leading: const Icon(Icons.layers),
+                  title: const Text('Add Children (N-ary)'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _addNChildren(node);
+                  }),
+              ListTile(
+                  leading: const Icon(Icons.call_split),
+                  title: const Text('Add Coupler'),
+                  subtitle: const Text('2-port unequal split'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _addCoupler(node);
+                  }),
+              ListTile(
+                  leading: const Icon(Icons.account_tree),
+                  title: const Text('Add Splitter'),
+                  subtitle: const Text('1xN equal split'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _addSplitter(node);
+                  }),
+              ListTile(
+                  leading: const Icon(Icons.edit),
+                  title: const Text('Edit Node / Device'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _editNode(node);
+                  }),
+              if (node.parentId != null)
+                ListTile(
+                    leading: const Icon(Icons.delete_sweep, color: Colors.red),
+                    title: const Text('Delete Entire Branch'),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _deleteBranch(node);
+                    }),
+              ListTile(
+                  leading: const Icon(Icons.close),
+                  title: const Text('Close'),
+                  onTap: () => Navigator.pop(ctx)),
+            ])));
+  }
+
+  // ---------- Save as image ----------
+  Future<void> _saveDiagram() async {
     try {
       final boundary = repaintKey.currentContext?.findRenderObject()
           as RenderRepaintBoundary?;
-      if (boundary == null) {
-        throw Exception('Diagram boundary not available');
-      }
-
-      final ui.Image image = await boundary.toImage(pixelRatio: 2.0);
-      final ByteData? byteData =
-          await image.toByteData(format: ui.ImageByteFormat.png);
-      if (byteData == null) throw Exception('Failed to convert image to bytes');
-
-      final Uint8List pngBytes = byteData.buffer.asUint8List();
+      if (boundary == null) throw Exception('Boundary not found');
+      final ui.Image img = await boundary.toImage(pixelRatio: 3.0);
+      final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) throw Exception('Failed to encode image');
+      final bytes = byteData.buffer.asUint8List();
 
       String? localPath;
-      Uint8List? storeBytes;
-
       if (kIsWeb) {
-        // Web: download and store bytes in Hive so history can preview
-        final blob = html.Blob([pngBytes]);
+        final blob = html.Blob([bytes]);
         final url = html.Url.createObjectUrlFromBlob(blob);
         final anchor = html.AnchorElement(href: url)
-          ..setAttribute("download",
-              "diagram_${DateTime.now().millisecondsSinceEpoch}.png")
+          ..setAttribute(
+              'download', 'ofc_${DateTime.now().millisecondsSinceEpoch}.png')
           ..click();
         html.Url.revokeObjectUrl(url);
-        storeBytes = pngBytes;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Diagram downloaded (Web)')),
-        );
       } else {
-        // Mobile/desktop: save to Downloads or documents
-        Directory targetDir;
+        Directory dir;
         final possible = Directory('/storage/emulated/0/Download');
-        if (await possible.exists()) {
-          targetDir = possible;
-        } else {
-          targetDir = await getApplicationDocumentsDirectory();
-        }
-        final filePath =
-            '${targetDir.path}/diagram_${DateTime.now().millisecondsSinceEpoch}.png';
-        final file = File(filePath);
-        await file.writeAsBytes(pngBytes);
+        if (await possible.exists())
+          dir = possible;
+        else
+          dir = await getApplicationDocumentsDirectory();
+        final file = File(
+            '${dir.path}/ofc_${DateTime.now().millisecondsSinceEpoch}.png');
+        await file.writeAsBytes(bytes);
         localPath = file.path;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Diagram saved locally')),
-        );
       }
 
-      // Attempt Supabase upload and get a public URL
+      // optional supabase upload
       String? publicUrl;
       try {
         final user = _supabase.auth.currentUser;
         if (user != null) {
           final storagePath =
               '${user.id}/${DateTime.now().millisecondsSinceEpoch}.png';
-          // try modern binary upload first
-          try {
-            await _supabase.storage.from('diagrams').uploadBinary(
-                  storagePath,
-                  pngBytes,
-                  fileOptions:
-                      const FileOptions(cacheControl: '3600', upsert: false),
-                );
-          } catch (e) {
-            // fallback to writing a temp file and uploading
-            final tmp =
-                File('${(await getTemporaryDirectory()).path}/tmp_upload.png');
-            await tmp.writeAsBytes(pngBytes);
-            try {
-              await _supabase.storage.from('diagrams').upload(storagePath, tmp);
-            } catch (_) {
-              // ignore
-            }
-          }
-
-          try {
-            final pubRes =
-                _supabase.storage.from('diagrams').getPublicUrl(storagePath);
-            if (pubRes is String) {
-              publicUrl = pubRes;
-            } else {
-              publicUrl =
-                  (pubRes as dynamic).url ?? (pubRes as dynamic).publicUrl;
-            }
-          } catch (_) {
-            // ignore
-          }
+          await _supabase.storage
+              .from('diagrams')
+              .uploadBinary(storagePath, bytes);
+          publicUrl =
+              _supabase.storage.from('diagrams').getPublicUrl(storagePath);
         }
       } catch (e) {
-        // ignore non-fatal upload errors
+        print('Supabase upload error: $e');
       }
 
-      // Save history to Hive
-      final box = await Hive.openBox('diagram_history');
+      final box = await Hive.openBox('diagram_downloads');
       await box.add({
-        'path': localPath,
-        'bytes': (kIsWeb ? storeBytes : null),
-        'cloud_url': publicUrl,
-        'date': DateTime.now().toIso8601String(),
+        'local': localPath,
+        'cloud': publicUrl,
+        'date': DateTime.now().toIso8601String()
       });
-
-      final msg = publicUrl != null
-          ? 'Saved locally and uploaded to cloud'
-          : 'Saved locally (cloud upload not available)';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content:
+              Text(publicUrl != null ? 'Saved & uploaded' : 'Saved locally')));
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Save failed: $e')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Save failed: $e')));
     }
   }
 
-  // Count nodes to estimate canvas size
-  int _countNodes(DiagramNode? node) {
-    if (node == null) return 0;
-    return 1 + _countNodes(node.left) + _countNodes(node.right);
-  }
-
-  double maxDouble(double a, double b) => a > b ? a : b;
-
+  // ---------- Build UI ----------
   @override
   Widget build(BuildContext context) {
-    final screen = MediaQuery.of(context).size;
-    final double blockWidth = 140;
-    final double blockHeight = 70;
-    final double dx = maxDouble(160, screen.width / 8);
-    final double dy = 120;
-    final int nodeCount = _countNodes(rootNode);
-    final int rows = (nodeCount / 4).ceil();
-    final double dynamicWidth =
-        maxDouble(baseDiagramWidth, screen.width * 1.4 + rows * 20);
-    final double dynamicHeight = maxDouble(baseDiagramHeight, 300 + rows * dy);
-
-    final double startX = dynamicWidth / 2 - blockWidth / 2;
-    // raise header down a bit to make it visible by default
-    final double startY = 80.0;
-    final overlays = _collectBlockPositions(
-        rootNode!, startX, startY, dx, dy, blockWidth, blockHeight);
-
     return Scaffold(
+      backgroundColor: const Color(0xFFF4F7FB),
       appBar: AppBar(
-        title: const Text("OFC Diagram Generator"),
-        backgroundColor: Colors.blue,
+        title: const Text('OFC Diagram Generator',
+            style: TextStyle(fontWeight: FontWeight.bold)),
+        centerTitle: true,
+        elevation: 0,
+        backgroundColor: const Color(0xFF163A8A),
+        actions: [
+          IconButton(
+              onPressed: () {
+                setState(() {
+                  _nodeCounter = 0;
+                  _initRoot();
+                });
+              },
+              icon: const Icon(Icons.refresh)),
+          IconButton(onPressed: _saveDiagram, icon: const Icon(Icons.download)),
+        ],
       ),
-      body: Column(
-        children: [
-          // headend inputs
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: headendCtrl,
-                        decoration:
-                            const InputDecoration(labelText: "Headend Name"),
-                        onChanged: (_) => updateHeadend(),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    SizedBox(
-                      width: 120,
-                      child: TextField(
-                        controller: headendDbmCtrl,
-                        decoration:
-                            const InputDecoration(labelText: "Headend dBm"),
-                        keyboardType: TextInputType.number,
-                        onChanged: (_) => updateHeadend(),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    ElevatedButton(
-                      onPressed: () {
-                        // allow regenerating diagram root label update
-                        setState(() {});
-                      },
-                      child: const Text("Update"),
-                    )
-                  ],
-                ),
-                const SizedBox(height: 8),
-                // Top-level control to add first coupler quickly
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        value: couplerOptions[0]["type"] as String,
-                        items: couplerOptions.map((opt) {
-                          return DropdownMenuItem<String>(
-                            value: opt["type"] as String,
-                            child: Text('${opt["type"]}'),
-                          );
-                        }).toList(),
-                        onChanged: (v) {
-                          // no-op here; full add flow happens via button
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    ElevatedButton(
-                      onPressed: () {
-                        // Add default coupler at root if root is leaf
-                        if (rootNode != null) {
-                          if (rootNode!.isLeaf) {
-                            _addOrExtendCoupler(rootNode!);
-                          } else {
-                            // add to a leaf descendant
-                            DiagramNode? leaf = rootNode;
-                            while (leaf != null && !leaf.isLeaf) {
-                              leaf = leaf.left ?? leaf.right;
-                            }
-                            if (leaf != null) _addOrExtendCoupler(leaf);
-                          }
-                        }
-                      },
-                      child: const Text("Generate Diagram"),
-                    )
-                  ],
-                ),
-              ],
-            ),
+      body: Column(children: [
+        // Premium headend header (pills)
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+                colors: [Color(0xFF163A8A), Color(0xFF2E6DF6)]),
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withOpacity(0.08),
+                  blurRadius: 12,
+                  offset: const Offset(0, 6))
+            ],
           ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: Center(
+          child: Row(children: [
+            Expanded(
+              flex: 6,
+              child: TextField(
+                controller: _headendNameCtrl,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: 'Headend Name',
+                  labelStyle: const TextStyle(color: Colors.white70),
+                  filled: true,
+                  fillColor: Colors.white.withOpacity(0.06),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              flex: 2,
+              child: TextField(
+                controller: _headendDbmCtrl,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: 'dBm',
+                  labelStyle: const TextStyle(color: Colors.white70),
+                  filled: true,
+                  fillColor: Colors.white.withOpacity(0.06),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            ElevatedButton(
+              onPressed: _updateHeadend,
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: const Color(0xFF163A8A),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12))),
+              child: const Text('Update',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ]),
+        ),
+
+        // Canvas
+        Expanded(
+          child: Container(
+            margin: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(18),
+                boxShadow: [
+                  BoxShadow(
+                      color: Colors.black.withOpacity(0.06),
+                      blurRadius: 20,
+                      offset: const Offset(0, 12))
+                ]),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(18),
               child: InteractiveViewer(
-                panEnabled: true,
-                scaleEnabled: true,
+                boundaryMargin: const EdgeInsets.all(200),
                 minScale: 0.3,
-                maxScale: 6.0,
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.vertical,
-                    child: RepaintBoundary(
-                      key: repaintKey,
-                      child: Container(
-                        width: dynamicWidth,
-                        height: dynamicHeight,
-                        color: Colors.white,
-                        child: Stack(
-                          children: [
-                            // The custom paint that draws blocks and lines
-                            DiagramTreeCustomPainterWidget(
-                              rootNode: rootNode!,
-                              blockWidth: blockWidth,
-                              blockHeight: blockHeight,
-                              dx: dx,
-                              dy: dy,
-                              startX: startX,
-                              startY: startY,
-                            ),
-                            // Positioned overlay buttons (these are inside the scrollable area
-                            // so they move/scale with the drawing)
-                            ...overlays.map((blk) {
-                              return Positioned(
-                                left: blk.x,
-                                top: blk.y,
-                                width: blk.width,
-                                height: blk.height,
-                                child: Stack(
-                                  children: [
-                                    // transparent hit area
-                                    Positioned.fill(
-                                      child: GestureDetector(
-                                        onTap: () {
-                                          if (blk.parentId == null) {
-                                            _onHeaderTap();
-                                          } else {
-                                            _onBlockTap(blk.id);
-                                          }
-                                        },
-                                        child: Container(
-                                          color: Colors.transparent,
-                                        ),
-                                      ),
-                                    ),
-                                    // edit button (top-left) if not root
-                                    if (blk.parentId != null)
-                                      Positioned(
-                                        left: -10,
-                                        top: -10,
-                                        child: GestureDetector(
-                                          onTap: () {
-                                            final node =
-                                                _findNodeById(rootNode, blk.id);
-                                            if (node != null) _editNode(node);
-                                          },
-                                          child: Container(
-                                            width: 26,
-                                            height: 26,
-                                            decoration: BoxDecoration(
-                                              color: Colors.blue,
-                                              borderRadius:
-                                                  BorderRadius.circular(13),
-                                              boxShadow: const [
-                                                BoxShadow(
-                                                    color: Colors.black26,
-                                                    blurRadius: 4)
-                                              ],
-                                            ),
-                                            child: const Icon(Icons.edit,
-                                                size: 14, color: Colors.white),
-                                          ),
-                                        ),
-                                      ),
-                                    // delete button (top-right)
-                                    if (blk.parentId != null)
-                                      Positioned(
-                                        right: -10,
-                                        top: -10,
-                                        child: GestureDetector(
-                                          onTap: () {
-                                            final removed = _removeNodeById(
-                                                rootNode, blk.id);
-                                            if (!removed) {
-                                              if (rootNode != null &&
-                                                  rootNode!.id == blk.id) {
-                                                setState(() {
-                                                  rootNode = DiagramNode(
-                                                    id: nodeId++,
-                                                    label: headendName,
-                                                    signal: headendDbm,
-                                                    distance: 0,
-                                                    isCoupler: false,
-                                                  );
-                                                });
-                                              }
-                                            }
-                                          },
-                                          child: Container(
-                                            width: 26,
-                                            height: 26,
-                                            decoration: BoxDecoration(
-                                              color: Colors.red,
-                                              borderRadius:
-                                                  BorderRadius.circular(13),
-                                              boxShadow: const [
-                                                BoxShadow(
-                                                    color: Colors.black26,
-                                                    blurRadius: 4)
-                                              ],
-                                            ),
-                                            child: const Icon(Icons.delete,
-                                                size: 14, color: Colors.white),
-                                          ),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              );
-                            }).toList(),
-                          ],
-                        ),
-                      ),
-                    ),
+                maxScale: 5.0,
+                child: RepaintBoundary(
+                  key: repaintKey,
+                  child: SizedBox(
+                    width: 2400,
+                    height: 1600,
+                    child: root != null
+                        ? DiagramWidget(
+                            root: root!, onTapNode: _showNodeOptions)
+                        : const Center(child: Text('No diagram')),
                   ),
                 ),
               ),
             ),
           ),
-        ],
-      ),
-      bottomNavigationBar: Container(
-        color: Colors.blue.shade50,
-        padding: const EdgeInsets.all(10),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            ElevatedButton.icon(
-              icon: const Icon(Icons.download),
-              label: const Text("Download Diagram"),
-              onPressed: saveDiagram,
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
-            ),
-          ],
         ),
-      ),
+      ]),
     );
   }
 }
 
-// overlay info
-class _BlockOverlayInfo {
-  final int id;
-  final double x, y, width, height;
-  final int? parentId;
-  final DiagramNode? nodeRef;
-  _BlockOverlayInfo({
-    required this.id,
-    required this.x,
-    required this.y,
-    required this.width,
-    required this.height,
-    required this.parentId,
-    required this.nodeRef,
-  });
-}
-
-// Painter widget that starts drawing from provided startX/startY
-class DiagramTreeCustomPainterWidget extends StatelessWidget {
-  final DiagramNode rootNode;
-  final double blockWidth, blockHeight, dx, dy;
-  final double startX, startY;
-
-  const DiagramTreeCustomPainterWidget({
-    super.key,
-    required this.rootNode,
-    required this.blockWidth,
-    required this.blockHeight,
-    required this.dx,
-    required this.dy,
-    required this.startX,
-    required this.startY,
-  });
+// ---------------- Diagram render widget ----------------
+class DiagramWidget extends StatelessWidget {
+  final DiagramNode root;
+  final void Function(DiagramNode) onTapNode;
+  const DiagramWidget({super.key, required this.root, required this.onTapNode});
 
   @override
   Widget build(BuildContext context) {
     return CustomPaint(
-      painter: DiagramTreePainter(
-        rootNode: rootNode,
-        x: startX,
-        y: startY,
-        dx: dx,
-        dy: dy,
-        blockWidth: blockWidth,
-        blockHeight: blockHeight,
-      ),
-      child: Container(),
-    );
+        painter: _DiagramPainter(root: root),
+        child: Stack(children: _overlay(root, 1200, 80)));
+  }
+
+  List<Widget> _overlay(DiagramNode node, double x, double y) {
+    final widgets = <Widget>[];
+    widgets.add(Positioned(
+        left: x - 100,
+        top: y - 40,
+        width: 200,
+        height: 80,
+        child: GestureDetector(
+            onTap: () => onTapNode(node),
+            child: Container(color: Colors.transparent))));
+    if (node.children.isNotEmpty) {
+      final count = node.children.length;
+      final spacing = 200.0;
+      final total = (count - 1) * spacing;
+      final startX = x - total / 2;
+      for (int i = 0; i < count; i++) {
+        final childX = startX + i * spacing;
+        widgets.addAll(_overlay(node.children[i], childX, y + 180));
+      }
+    }
+    return widgets;
   }
 }
 
-class DiagramTreePainter extends CustomPainter {
-  final DiagramNode rootNode;
-  final double x, y, dx, dy, blockWidth, blockHeight;
-
-  DiagramTreePainter({
-    required this.rootNode,
-    required this.x,
-    required this.y,
-    required this.dx,
-    required this.dy,
-    required this.blockWidth,
-    required this.blockHeight,
-  });
+class _DiagramPainter extends CustomPainter {
+  final DiagramNode root;
+  _DiagramPainter({required this.root});
 
   @override
-  void paint(Canvas canvas, Size size) {
-    _drawBlockWithLines(canvas, rootNode, x, y, dx, dy);
-  }
+  void paint(Canvas canvas, Size size) => _draw(canvas, root, 1200, 80);
 
-  /// Draws the node, returns the top-center offset of the block (used by parent)
-  Offset _drawBlockWithLines(Canvas canvas, DiagramNode node, double x,
-      double y, double dx, double dy) {
-    // draw children first to compute their centers
-    Offset? leftCenter;
-    Offset? rightCenter;
-    if (node.left != null) {
-      leftCenter =
-          _drawBlockWithLines(canvas, node.left!, x - dx, y + dy, dx / 1.5, dy);
-    }
-    if (node.right != null) {
-      rightCenter = _drawBlockWithLines(
-          canvas, node.right!, x + dx, y + dy, dx / 1.5, dy);
-    }
-
-    // draw connections in a non-inverted-V style:
-    // - from bottom-center of current node draw a vertical line down to junction
-    // - from junction draw horizontal lines to each child's top-center
-    Rect rect = Rect.fromLTWH(x, y, blockWidth, blockHeight);
-    final Offset myCenterTop = Offset(x + blockWidth / 2, y);
-    final Offset myCenterBottom = Offset(x + blockWidth / 2, y + blockHeight);
-
-    if (leftCenter != null || rightCenter != null) {
-      final double junctionY = y + blockHeight + 20;
-      final Offset junction = Offset(myCenterBottom.dx, junctionY);
-
-      // vertical line
-      canvas.drawLine(
-        myCenterBottom,
-        junction,
-        Paint()
-          ..color = Colors.black
-          ..strokeWidth = 2,
-      );
-
-      // horizontal to left
-      if (leftCenter != null) {
-        final Offset leftTop = Offset(leftCenter.dx, leftCenter.dy);
-        final Offset leftMid = Offset(leftTop.dx, junctionY);
-        canvas.drawLine(
-            junction,
-            leftMid,
-            Paint()
-              ..color = Colors.black
-              ..strokeWidth = 2);
-        canvas.drawLine(
-            leftMid,
-            leftTop,
-            Paint()
-              ..color = Colors.black
-              ..strokeWidth = 2);
-
-        // draw distance / dbm near horizontal line (midpoint)
-        final Offset labelPos =
-            Offset((junction.dx + leftMid.dx) / 2, junctionY - 10);
-        _drawSmallLabel(canvas, '${node.left!.distance} km', labelPos);
-        // dbm on the other side
-        final Offset dbmPos =
-            Offset((junction.dx + leftMid.dx) / 2, junctionY + 2);
-        _drawSmallLabel(
-            canvas, '${node.left!.signal.toStringAsFixed(2)} dBm', dbmPos);
-      }
-
-      // horizontal to right
-      if (rightCenter != null) {
-        final Offset rightTop = Offset(rightCenter.dx, rightCenter.dy);
-        final Offset rightMid = Offset(rightTop.dx, junctionY);
-        canvas.drawLine(
-            junction,
-            rightMid,
-            Paint()
-              ..color = Colors.black
-              ..strokeWidth = 2);
-        canvas.drawLine(
-            rightMid,
-            rightTop,
-            Paint()
-              ..color = Colors.black
-              ..strokeWidth = 2);
-
-        final Offset labelPos =
-            Offset((junction.dx + rightMid.dx) / 2, junctionY - 10);
-        _drawSmallLabel(canvas, '${node.right!.distance} km', labelPos);
-        final Offset dbmPos =
-            Offset((junction.dx + rightMid.dx) / 2, junctionY + 2);
-        _drawSmallLabel(
-            canvas, '${node.right!.signal.toStringAsFixed(2)} dBm', dbmPos);
-      }
-    }
-
-    // draw block rectangle
-    Paint blockPaint = Paint()
-      ..color = (node.parentId == null)
-          ? Colors.green
-          : (node.branchLabel == 'A'
-              ? const Color(0xFF0B6EFD) // impressive blue for A
-              : const Color(0xFF00BFA6)); // awesome teal for B
-    RRect rrect = RRect.fromRectAndRadius(rect, const Radius.circular(12));
-    canvas.drawRRect(rrect, blockPaint);
-    canvas.drawRRect(
-      rrect,
-      Paint()
-        ..color = Colors.black.withOpacity(0.28)
+  void _draw(Canvas canvas, DiagramNode node, double x, double y) {
+    // children
+    if (node.children.isNotEmpty) {
+      final count = node.children.length;
+      final spacing = 200.0;
+      final total = (count - 1) * spacing;
+      final startX = x - total / 2;
+      final paintLine = Paint()
+        ..color = Colors.grey.shade500
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.2,
-    );
+        ..strokeWidth = 2.5;
 
-    // label inside block
-    final textPainter = _textPainter(
-        "${node.label}${node.signal != 0 ? "\n${node.signal.toStringAsFixed(2)} dBm" : ""}",
-        node.parentId == null ? 16 : 14,
-        Colors.white,
-        maxWidth: blockWidth - 8);
-    textPainter.paint(
-        canvas,
-        Offset(x + (blockWidth - textPainter.width) / 2,
-            y + (blockHeight - textPainter.height) / 2));
+      for (int i = 0; i < count; i++) {
+        final childX = startX + i * spacing;
+        final childY = y + 180;
+        final path = Path();
+        path.moveTo(x, y + 40);
+        path.quadraticBezierTo(x, y + 110, childX, childY - 40);
+        canvas.drawPath(path, paintLine);
 
-    // return top-center of this block (so parent can connect to it)
-    return Offset(x + blockWidth / 2, y);
+        _draw(canvas, node.children[i], childX, childY);
+
+        // Display loss value and signal on the line
+        if (node.children[i].deviceLoss > 0) {
+          final lossTp = _text(
+              'Loss: ${node.children[i].deviceLoss.toStringAsFixed(2)} dB',
+              10,
+              Colors.red.shade700,
+              fontWeight: FontWeight.bold);
+          lossTp.paint(canvas, Offset(childX - lossTp.width / 2, childY - 75));
+        }
+
+        final tp = _text('${node.children[i].signal.toStringAsFixed(2)} dBm',
+            11, Colors.grey.shade700);
+        tp.paint(canvas, Offset(childX - tp.width / 2, childY - 60));
+      }
+    }
+
+    // node box
+    final rect = RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(x, y), width: 180, height: 90),
+        const Radius.circular(14));
+    Color fill;
+    if (node.isHeadend)
+      fill = const Color(0xFF10B981);
+    else if (node.isCoupler)
+      fill = const Color(0xFF3B82F6);
+    else if (node.isSplitter)
+      fill = const Color(0xFF8B5CF6);
+    else
+      fill = const Color(0xFF6B7280);
+
+    // shadow
+    canvas.drawRRect(
+        rect.shift(const Offset(0, 4)),
+        Paint()
+          ..color = Colors.black.withOpacity(0.12)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
+    canvas.drawRRect(rect, Paint()..color = fill);
+    canvas.drawRRect(
+        rect,
+        Paint()
+          ..color = Colors.white.withOpacity(0.18)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.6);
+
+    final labelTp =
+        _text(node.label, 14, Colors.white, fontWeight: FontWeight.bold);
+    labelTp.paint(canvas, Offset(x - labelTp.width / 2, y - 22));
+
+    final sigTp = _text('${node.signal.toStringAsFixed(2)} dBm', 12,
+        Colors.white.withOpacity(0.95));
+    sigTp.paint(canvas, Offset(x - sigTp.width / 2, y + 4));
+
+    if (node.isLeaf && !node.isHeadend) _drawHouse(canvas, Offset(x, y + 60));
   }
 
-  void _drawSmallLabel(Canvas canvas, String label, Offset pos) {
-    final span = TextSpan(
-      text: label,
-      style: const TextStyle(fontSize: 11, color: Colors.black),
-    );
+  void _drawHouse(Canvas canvas, Offset c) {
+    final paint = Paint()..color = const Color(0xFF8B4513);
+    final size = 24.0;
+
+    // Roof
+    final roof = Path();
+    roof.moveTo(c.dx, c.dy - size * 0.5);
+    roof.lineTo(c.dx - size * 0.7, c.dy);
+    roof.lineTo(c.dx + size * 0.7, c.dy);
+    roof.close();
+    canvas.drawPath(roof, Paint()..color = const Color(0xFFD32F2F));
+
+    // House body
+    canvas.drawRRect(
+        RRect.fromRectAndRadius(
+            Rect.fromCenter(
+                center: Offset(c.dx, c.dy + size * 0.4),
+                width: size * 1.2,
+                height: size * 0.8),
+            const Radius.circular(2)),
+        Paint()..color = const Color(0xFFFFE082));
+
+    // Door
+    canvas.drawRRect(
+        RRect.fromRectAndRadius(
+            Rect.fromCenter(
+                center: Offset(c.dx, c.dy + size * 0.6),
+                width: size * 0.35,
+                height: size * 0.5),
+            const Radius.circular(2)),
+        Paint()..color = paint.color);
+
+    // Window
+    canvas.drawCircle(Offset(c.dx + size * 0.3, c.dy + size * 0.3), size * 0.15,
+        Paint()..color = const Color(0xFF64B5F6));
+
+    // Chimney
+    canvas.drawRect(
+        Rect.fromLTWH(
+            c.dx + size * 0.3, c.dy - size * 0.6, size * 0.2, size * 0.3),
+        Paint()..color = const Color(0xFF8B4513));
+  }
+
+  TextPainter _text(String text, double size, Color color,
+      {FontWeight fontWeight = FontWeight.normal}) {
     final tp = TextPainter(
-      text: span,
-      textAlign: TextAlign.center,
-      textDirection: TextDirection.ltr,
-    );
+        text: TextSpan(
+            text: text,
+            style: TextStyle(
+                fontSize: size, color: color, fontWeight: fontWeight)),
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr);
     tp.layout();
-    tp.paint(canvas, Offset(pos.dx - tp.width / 2, pos.dy - tp.height / 2));
-  }
-
-  TextPainter _textPainter(String text, double fontSize, Color color,
-      {double maxWidth = 200}) {
-    final span = TextSpan(
-      text: text,
-      style: TextStyle(
-          fontSize: fontSize, color: color, fontWeight: FontWeight.bold),
-    );
-    final painter = TextPainter(
-      text: span,
-      textAlign: TextAlign.center,
-      textDirection: TextDirection.ltr,
-    );
-    painter.layout(maxWidth: maxWidth);
-    return painter;
+    return tp;
   }
 
   @override
