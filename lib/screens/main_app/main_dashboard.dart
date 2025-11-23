@@ -2,24 +2,29 @@ import 'package:flutter/material.dart';
 import '../../services/auth_service.dart';
 import '../../utils/constants.dart';
 import '../auth/login_page.dart';
-import 'coupler_calculator.dart';
-import 'splitter_calculator.dart';
+import '../main_app/cal_onepage.dart';
 import '../diagram/diagram_page.dart';
 import '../diagram/diagram_history_page.dart';
+import '../downloads/download_page.dart';
 
-class MainDashboard extends StatelessWidget {
+class MainDashboard extends StatefulWidget {
   const MainDashboard({super.key});
 
+  @override
+  State<MainDashboard> createState() => _MainDashboardState();
+}
+
+class _MainDashboardState extends State<MainDashboard> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       drawer: _buildSidebar(context),
-      backgroundColor: AppConstants.backgroundColor,
+      backgroundColor: Colors.grey[50],
       appBar: AppBar(
         title: const Text(
           'OFC-CAL',
           style: TextStyle(
-            fontSize: 24,
+            fontSize: 22,
             fontWeight: FontWeight.bold,
             color: Colors.white,
           ),
@@ -29,10 +34,9 @@ class MainDashboard extends StatelessWidget {
         elevation: 0,
         actions: [
           IconButton(
-            icon: const Icon(Icons.logout, color: Colors.white),
-            onPressed: () {
-              _showLogoutDialog(context);
-            },
+            icon: const Icon(Icons.logout_rounded),
+            onPressed: () => _showLogoutDialog(context),
+            tooltip: 'Logout',
           ),
         ],
       ),
@@ -41,112 +45,143 @@ class MainDashboard extends StatelessWidget {
           // Header Section
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
                 colors: [
                   AppConstants.primaryColor,
-                  AppConstants.primaryColor.withOpacity(0.9),
+                  AppConstants.primaryColor.withOpacity(0.85),
                 ],
               ),
             ),
-            child: Column(
-              children: [
-                const SizedBox(height: 10),
-                const Text(
-                  'Fiber Optic Calculator',
-                  style: TextStyle(
-                    fontSize: 18,
-                    color: Colors.white70,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Text(
-                    'Professional FTTH Calculations',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.white,
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Icon(
+                            Icons.settings_input_component_rounded,
+                            color: Colors.white,
+                            size: 32,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Fiber Optic',
+                              style: TextStyle(
+                                fontSize: 24,
+                                color: Colors.white,
+                                fontWeight: FontWeight.w300,
+                              ),
+                            ),
+                            Text(
+                              'CALCULATOR',
+                              style: TextStyle(
+                                fontSize: 20,
+                                color: Colors.white.withOpacity(0.95),
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ),
-                  ),
+                    const SizedBox(height: 20),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(25),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.verified_rounded,
+                            color: Colors.white,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Professional FTTH Solutions',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.white.withOpacity(0.95),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
-          // Calculator Grid - Only working calculators
+
+          // Cards Section
           Expanded(
-            child: Padding(
+            child: SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
               padding: const EdgeInsets.all(20),
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _buildCalculatorCard(
-                          context,
-                          'COUPLER',
-                          Icons.account_tree,
-                          Colors.orange,
-                          'Calculate coupler loss values',
-                          () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) =>
-                                    const CouplerCalculatorPage(),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: _buildCalculatorCard(
-                          context,
-                          'SPLITTER',
-                          Icons.splitscreen,
-                          Colors.green,
-                          'Calculate splitter loss values',
-                          () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) =>
-                                    const SplitterCalculatorPage(),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
+                  const SizedBox(height: 8),
+
+                  // Only 1 Calculator Card (Full Width)
+                  _buildEnhancedCalculatorCard(
+                    context,
+                    'FTTH CALCULATOR',
+                    Icons.calculate_rounded,
+                    const Color(0xFF7B2CBF),
+                    const Color(0xFF9D4EDD),
+                    'Combined Coupler + Splitter\nloss values with diagram',
+                    () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const CouplerSplitterOnePage()),
+                      );
+                    },
+                    isFullWidth: true,
                   ),
-                  const SizedBox(height: 24),
-                  Align(
-                    alignment: Alignment.center,
-                    child: ElevatedButton(
-                      child: const Text("Generate Diagram"),
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const OFCDiagramPage()),
-                        );
-                      },
-                    ),
-                  ),
+
                   const SizedBox(height: 16),
+
+                  // DIAGRAM Card Full Width
+                  _buildEnhancedCalculatorCard(
+                    context,
+                    'DIAGRAM',
+                    Icons.account_tree_rounded,
+                    const Color(0xFF3498DB),
+                    const Color(0xFF2980B9),
+                    'Generate network topology diagram',
+                    () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const OFCDiagramPage()),
+                      );
+                    },
+                    isFullWidth: true,
+                  ),
                 ],
               ),
             ),
@@ -158,97 +193,350 @@ class MainDashboard extends StatelessWidget {
 
   Drawer _buildSidebar(BuildContext context) {
     return Drawer(
-      child: ListView(
-        padding: EdgeInsets.zero,
-        children: [
-          // Profile header (avatar, name, email placeholder)
-          UserAccountsDrawerHeader(
-            accountName:
-                Text('Your Name'), // TODO: connect to user data if available
-            accountEmail: Text('your.mail@example.com'),
-            currentAccountPicture: CircleAvatar(
-              child: Icon(Icons.person, size: 36),
-              backgroundColor: Colors.white,
+      elevation: 16,
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.white,
+              Colors.grey.shade50,
+            ],
+          ),
+        ),
+        child: Column(
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(24, 50, 24, 32),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    AppConstants.primaryColor,
+                    AppConstants.primaryColor.withOpacity(0.8),
+                  ],
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.cable_rounded,
+                      color: Colors.white,
+                      size: 32,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'OFC-CAL',
+                    style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Fiber Optic Calculator',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.white.withOpacity(0.9),
+                    ),
+                  ),
+                ],
+              ),
             ),
-            decoration: BoxDecoration(
-              color: AppConstants.primaryColor,
+
+            const SizedBox(height: 12),
+
+            _buildMenuTile(
+              context,
+              Icons.dashboard_customize_rounded,
+              'Dashboard',
+              () => Navigator.pop(context),
             ),
-          ),
-          ListTile(
-            leading: Icon(Icons.download),
-            title: Text('Downloads'),
-            onTap: () {
-              Navigator.pop(context);
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => DiagramHistoryPage()),
-              );
-            },
-          ),
-          ListTile(
-            leading: Icon(Icons.dashboard_customize),
-            title: Text('Dashboard Home'),
-            onTap: () => Navigator.pop(context),
-          ),
-        ],
+
+            // Only 1 Calculator Menu (name changed to CouplerSplitterOnePage)
+            _buildMenuTile(
+              context,
+              Icons.calculate_rounded,
+              'FTTH Calculator',
+              () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const CouplerSplitterOnePage()),
+                );
+              },
+            ),
+
+            _buildMenuTile(
+              context,
+              Icons.account_tree_rounded,
+              'Network Diagram',
+              () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const OFCDiagramPage()),
+                );
+              },
+            ),
+
+            _buildMenuTile(
+              context,
+              Icons.history_rounded,
+              'Diagram History',
+              () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const DiagramHistoryPage()),
+                );
+              },
+            ),
+
+            _buildMenuTile(
+              context,
+              Icons.cloud_download_rounded,
+              'Downloads',
+              () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const DownloadsPage()),
+                );
+              },
+            ),
+
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                children: [
+                  Divider(color: Colors.grey.shade300, thickness: 1),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.verified_rounded,
+                        size: 16,
+                        color: AppConstants.primaryColor,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Version 1.0.0',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade700,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildCalculatorCard(
+  Widget _buildMenuTile(
+    BuildContext context,
+    IconData icon,
+    String title,
+    VoidCallback onTap,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              color: Colors.white,
+              border: Border.all(
+                color: Colors.grey.shade200,
+                width: 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppConstants.primaryColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    icon,
+                    size: 20,
+                    color: AppConstants.primaryColor,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: AppConstants.textColor,
+                    ),
+                  ),
+                ),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  color: Colors.grey.shade400,
+                  size: 20,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEnhancedCalculatorCard(
     BuildContext context,
     String title,
     IconData icon,
-    Color color,
+    Color primaryColor,
+    Color secondaryColor,
     String subtitle,
-    VoidCallback onTap,
-  ) {
-    return Card(
-      elevation: 4,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Container(
-          padding: const EdgeInsets.all(20),
-          height: 180,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: color.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(
-                  icon,
-                  size: 32,
-                  color: color,
-                ),
+    VoidCallback onTap, {
+    bool isFullWidth = false,
+  }) {
+    return Hero(
+      tag: title,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(18),
+          child: Container(
+            height: 170,
+            width: double.infinity,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [primaryColor, secondaryColor],
               ),
-              const SizedBox(height: 12),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: AppConstants.textColor,
+              borderRadius: BorderRadius.circular(18),
+              boxShadow: [
+                BoxShadow(
+                  color: primaryColor.withOpacity(0.35),
+                  blurRadius: 15,
+                  offset: const Offset(0, 8),
                 ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 4),
-              Text(
-                subtitle,
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: AppConstants.textLightColor,
+              ],
+            ),
+            child: Stack(
+              children: [
+                Positioned(
+                  right: -15,
+                  top: -15,
+                  child: Container(
+                    width: 80,
+                    height: 80,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white.withOpacity(0.1),
+                    ),
+                  ),
                 ),
-                textAlign: TextAlign.center,
-              ),
-            ],
+                Positioned(
+                  left: -25,
+                  bottom: -25,
+                  child: Container(
+                    width: 100,
+                    height: 100,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white.withOpacity(0.05),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          icon,
+                          size: 30,
+                          color: Colors.white,
+                        ),
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            subtitle,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.white.withOpacity(0.9),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                Positioned(
+                  right: 14,
+                  bottom: 14,
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.25),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(
+                      Icons.arrow_forward_rounded,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -259,14 +547,41 @@ class MainDashboard extends StatelessWidget {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Logout'),
-        content: const Text('Are you sure you want to logout?'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.red.shade50,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(Icons.logout_rounded,
+                  color: Colors.red.shade700, size: 20),
+            ),
+            const SizedBox(width: 12),
+            const Text(
+              'Logout',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+          ],
+        ),
+        content: const Text(
+          'Are you sure you want to logout from your account?',
+          style: TextStyle(fontSize: 14),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text(
+              'Cancel',
+              style: TextStyle(
+                color: Colors.grey.shade700,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
-          TextButton(
+          ElevatedButton(
             onPressed: () {
               AuthService().logout();
               Navigator.pushReplacement(
@@ -274,7 +589,17 @@ class MainDashboard extends StatelessWidget {
                 MaterialPageRoute(builder: (context) => const LoginPage()),
               );
             },
-            child: const Text('Logout'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red.shade600,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            ),
+            child: const Text(
+              'Logout',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
           ),
         ],
       ),
