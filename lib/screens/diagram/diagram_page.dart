@@ -1,6 +1,5 @@
 // lib/screens/diagram/diagram_page.dart
-// Final professional OFC Diagram Generator — Unlimited Dynamic Nodes (Option C)
-// Integrates provided CouplerCalculator & SplitterCalculator logic.
+// Enhanced OFC Diagram Generator with immediate coupler splitting
 
 import 'dart:io';
 import 'dart:typed_data';
@@ -13,25 +12,39 @@ import 'package:flutter/rendering.dart';
 import '../../html_stub.dart' if (dart.library.html) '../../html_real.dart'
     as html;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'dart:math' as math;
+
+// ---------------- Helper Functions ----------------
+const double ln10 = 2.302585092994046;
+
+double log(double x) {
+  return math.log(x);
+}
 
 // ---------------- Constants ----------------
 final double defaultHeadendDbm = 19.0;
-final double fiberAttenuationDbPerKm =
-    0.35; // dB per km attenuation (adjustable)
+final double fiberAttenuationDbPerKm = 0.25;
 
 // ---------------- Diagram Node ----------------
 class DiagramNode {
   int id;
   String label;
-  double signal; // dBm at node
-  double distance; // km to this node from parent
+  double signal;
+  double distance;
   List<DiagramNode> children;
   int? parentId;
-  String deviceType; // 'headend','coupler','splitter','leaf','pass'
-  String?
-      deviceConfig; // encoded metadata (section::ratio::value or section::split::value)
+  String deviceType;
+  String? deviceConfig;
   int outputPort;
-  double deviceLoss; // The actual loss value for this port
+  double deviceLoss;
+  String wavelength;
+  bool useWdm;
+  double wdmLoss;
+  int? couplerRatio;
+  bool isCouplerOutput;
+  double couplerValue;
+  bool isSplitterOutput;
+  double fiberLoss;
 
   DiagramNode({
     required this.id,
@@ -44,15 +57,26 @@ class DiagramNode {
     this.deviceConfig,
     this.outputPort = 0,
     this.deviceLoss = 0.0,
+    this.wavelength = '1550',
+    this.useWdm = false,
+    this.wdmLoss = 0.0,
+    this.couplerRatio,
+    this.isCouplerOutput = false,
+    this.couplerValue = 1.0,
+    this.isSplitterOutput = false,
+    this.fiberLoss = 0.0,
   }) : children = children ?? [];
 
   bool get isLeaf => children.isEmpty;
   bool get isCoupler => deviceType == 'coupler';
   bool get isSplitter => deviceType == 'splitter';
   bool get isHeadend => deviceType == 'headend';
+  bool get isCouplerSplitBlock => isCouplerOutput;
 }
 
-// ---------------- CouplerCalculator (inlined from your file) ----------------
+// ---------------- CouplerCalculator ----------------
+
+// ---------------- CouplerCalculator ----------------
 class CouplerCalculator {
   final double couplerValue;
   CouplerCalculator(this.couplerValue);
@@ -136,6 +160,32 @@ class CouplerCalculator {
         {"ratio": 50, "val1": 7.0, "val2": 7.0},
       ],
     },
+    19.0: {
+      "LOSS-15 50": [
+        {"ratio": 5, "val1": 6.5, "val2": 18.6},
+        {"ratio": 10, "val1": 8.5, "val2": 18.4},
+        {"ratio": 15, "val1": 10.5, "val2": 18.0},
+        {"ratio": 20, "val1": 11.5, "val2": 17.6},
+        {"ratio": 25, "val1": 12.5, "val2": 17.2},
+        {"ratio": 30, "val1": 13.2, "val2": 17.0},
+        {"ratio": 35, "val1": 14.0, "val2": 16.8},
+        {"ratio": 40, "val1": 14.5, "val2": 16.2},
+        {"ratio": 45, "val1": 15.0, "val2": 16.0},
+        {"ratio": 50, "val1": 15.5, "val2": 15.5},
+      ],
+      "LOSS-13 10": [
+        {"ratio": 5, "val1": 7.5, "val2": 18.8},
+        {"ratio": 10, "val1": 9.1, "val2": 18.6},
+        {"ratio": 15, "val1": 10.5, "val2": 18.3},
+        {"ratio": 20, "val1": 12.1, "val2": 18.1},
+        {"ratio": 25, "val1": 12.9, "val2": 17.8},
+        {"ratio": 30, "val1": 13.8, "val2": 17.5},
+        {"ratio": 35, "val1": 14.4, "val2": 17.2},
+        {"ratio": 40, "val1": 15.1, "val2": 16.8},
+        {"ratio": 45, "val1": 15.5, "val2": 16.4},
+        {"ratio": 50, "val1": 16.0, "val2": 16.0},
+      ],
+    },
   };
 
   List<Map<String, dynamic>> calculateLoss() {
@@ -181,7 +231,7 @@ class CouplerCalculator {
   }
 }
 
-// ---------------- SplitterCalculator (inlined) ----------------
+// ---------------- SplitterCalculator ----------------
 class SplitterCalculator {
   final double splitterValue;
   SplitterCalculator(this.splitterValue);
@@ -193,12 +243,21 @@ class SplitterCalculator {
     final loss1550 = [-3.6, -6.8, -10.0, -13.0, -16.0, -19.5];
     final loss1310 = [-3.0, -6.4, -9.9, -13.2, -16.4, -19.4];
 
-    double adjust = splitterValue - 1.0;
+    final adjust = splitterValue;
 
-    result["LOSS-15 50"] = List.generate(splits.length,
-        (i) => {'split': splits[i], 'value': loss1550[i] + adjust});
-    result["LOSS-13 10"] = List.generate(splits.length,
-        (i) => {'split': splits[i], 'value': loss1310[i] + adjust});
+    result["LOSS-15 50"] = List.generate(
+        splits.length,
+        (i) => {
+              'split': splits[i],
+              'value': double.parse((loss1550[i] + adjust).toStringAsFixed(2))
+            });
+
+    result["LOSS-13 10"] = List.generate(
+        splits.length,
+        (i) => {
+              'split': splits[i],
+              'value': double.parse((loss1310[i] + adjust).toStringAsFixed(2))
+            });
 
     return result;
   }
@@ -217,9 +276,13 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       TextEditingController(text: "EDFA/PON/TR");
   final TextEditingController _headendDbmCtrl =
       TextEditingController(text: defaultHeadendDbm.toString());
+  final TextEditingController _wdmLossCtrl = TextEditingController(text: "0.0");
 
   DiagramNode? root;
   int _nodeCounter = 0;
+  String _selectedWavelength = '1550';
+  bool _useWdm = false;
+  double _wdmLoss = 0.0;
   final SupabaseClient _supabase = Supabase.instance.client;
 
   @override
@@ -237,47 +300,103 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       signal: double.tryParse(_headendDbmCtrl.text) ?? defaultHeadendDbm,
       distance: 0,
       deviceType: 'headend',
+      wavelength: _selectedWavelength,
+      useWdm: _useWdm,
+      wdmLoss: _wdmLoss,
     );
   }
 
-  // ---------- recalc function using deviceConfig + calculators ----------
+  // Helper method to calculate coupler losses using reference data
+  // Helper method to calculate coupler losses using reference data
+  // Helper method to calculate coupler losses using reference data
+  // Helper method to calculate coupler losses using reference data
+  // Helper method to calculate coupler losses using reference data
+  List<double> _calculateCouplerLosses(
+      int ratio, double inputPower, String wavelength) {
+    final calculator = CouplerCalculator(inputPower);
+    final calculatedData = calculator.calculateLoss();
+
+    final section = wavelength == '1310' ? 'LOSS-13 10' : 'LOSS-15 50';
+    final sectionData = calculatedData.firstWhere(
+      (s) => s['section'] == section,
+      orElse: () => calculatedData[0],
+    );
+
+    final dataList = (sectionData['data'] as List).cast<Map<String, dynamic>>();
+
+    final entry = dataList.firstWhere(
+      (e) => e['ratio'] == ratio,
+      orElse: () => dataList.first,
+    );
+
+    final val1 = (entry['val1'] as num).toDouble();
+    final val2 = (entry['val2'] as num).toDouble();
+
+    // For 19 dBm input, the values are output powers, so calculate losses
+    if (inputPower == 19.0) {
+      final loss1 = val1 - inputPower; // This will be negative
+      final loss2 = val2 - inputPower; // This will be negative
+      return [
+        inputPower + loss1, // Output power for port 1
+        inputPower + loss2, // Output power for port 2
+        loss1.abs(), // Loss value for port 1
+        loss2.abs() // Loss value for port 2
+      ];
+    } else {
+      // For other input powers, val1 and val2 are already loss values
+      return [
+        inputPower + val1, // Output power for port 1
+        inputPower + val2, // Output power for port 2
+        val1.abs(), // Loss value for port 1
+        val2.abs() // Loss value for port 2
+      ];
+    }
+  }
+
   void _recalculate(DiagramNode node) {
     if (node.children.isEmpty) return;
 
-    if (node.isCoupler && node.deviceConfig != null) {
-      // format: "SECTION::RATIO::COUPLERVALUE"
+    final wavelength = node.wavelength;
+    final section = wavelength == '1310' ? 'LOSS-13 10' : 'LOSS-15 50';
+    final wdmLoss = node.useWdm ? node.wdmLoss : 0.0;
+
+    if (node.isCoupler && node.deviceConfig != null && !node.isCouplerOutput) {
       final parts = node.deviceConfig!.split('::');
-      final section = parts.isNotEmpty ? parts[0] : 'LOSS-15 50';
-      final ratio = parts.length > 1 ? int.tryParse(parts[1]) ?? 50 : 50;
+      final ratio = parts.isNotEmpty ? int.tryParse(parts[0]) ?? 50 : 50;
       final couplerVal =
-          parts.length > 2 ? double.tryParse(parts[2]) ?? 1.0 : 1.0;
+          parts.length > 1 ? double.tryParse(parts[1]) ?? 1.0 : 1.0;
 
-      final calc = CouplerCalculator(couplerVal);
-      final all = calc.calculateLoss();
-      final sec =
-          all.firstWhere((s) => s['section'] == section, orElse: () => all[0]);
-      final data = (sec['data'] as List).cast<Map<String, dynamic>>();
-      final entry =
-          data.firstWhere((e) => e['ratio'] == ratio, orElse: () => data.last);
-      final p1 = (entry['val1'] as num).toDouble();
-      final p2 = (entry['val2'] as num).toDouble();
+      // Recalculate coupler losses with current input power
+      final losses =
+          _calculateCouplerLosses(ratio, node.signal, node.wavelength);
+      final p1 = losses[0];
+      final p2 = losses[1];
 
-      final losses = [p1, p2];
-      for (int i = 0; i < node.children.length && i < 2; i++) {
+      final adjustedP1 = p1 - wdmLoss;
+      final adjustedP2 = p2 - wdmLoss;
+
+      for (int i = 0; i < node.children.length; i++) {
         final child = node.children[i];
         final dLoss = child.distance * fiberAttenuationDbPerKm;
-        child.deviceLoss = losses[i].abs();
-        child.signal = node.signal + losses[i] - dLoss;
-        child.outputPort = i;
+        child.wavelength = wavelength;
+        child.useWdm = node.useWdm;
+        child.wdmLoss = node.wdmLoss;
+
+        if (i == 0) {
+          child.signal = node.signal + adjustedP1 - dLoss;
+          child.deviceLoss = losses[2]; // Update loss value dynamically
+        } else if (i == 1) {
+          child.signal = node.signal + adjustedP2 - dLoss;
+          child.deviceLoss = losses[3]; // Update loss value dynamically
+        }
+
         _recalculate(child);
       }
     } else if (node.isSplitter && node.deviceConfig != null) {
-      // format: "SECTION::SPLIT::SPLITTERVALUE"
       final parts = node.deviceConfig!.split('::');
-      final section = parts.isNotEmpty ? parts[0] : 'LOSS-15 50';
-      final split = parts.length > 1 ? int.tryParse(parts[1]) ?? 2 : 2;
+      final split = parts.isNotEmpty ? int.tryParse(parts[0]) ?? 2 : 2;
       final splitterVal =
-          parts.length > 2 ? double.tryParse(parts[2]) ?? 1.0 : 1.0;
+          parts.length > 1 ? double.tryParse(parts[1]) ?? 1.0 : 1.0;
 
       final calc = SplitterCalculator(splitterVal);
       final all = calc.calculateLoss();
@@ -286,21 +405,48 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
           sec.firstWhere((e) => e['split'] == split, orElse: () => sec.first);
       final perLoss = (entry['value'] as num).toDouble();
 
+      final wdmLoss = node.useWdm ? node.wdmLoss : 0.0;
+      final adjustedLoss = perLoss - wdmLoss;
+
+      // Update node signal with the splitter loss
+      node.signal = node.signal + adjustedLoss;
+
       for (int i = 0; i < node.children.length; i++) {
         final child = node.children[i];
         final dLoss = child.distance * fiberAttenuationDbPerKm;
-        child.deviceLoss = perLoss.abs();
-        child.signal = node.signal + perLoss - dLoss;
-        child.outputPort = i;
-        _recalculate(child);
+        child.wavelength = wavelength;
+        child.useWdm = node.useWdm;
+        child.wdmLoss = node.wdmLoss;
+        child.deviceLoss = adjustedLoss.abs(); // Update splitter loss value
+        child.signal =
+            node.signal - dLoss; // Update child signal with distance loss
+        _recalculate(child); // Recursively update all children
       }
     } else {
-      // pass-through (only distance loss)
       for (final child in node.children) {
         final dLoss = child.distance * fiberAttenuationDbPerKm;
-        child.signal = node.signal - dLoss;
+
+        if (!child.isCouplerOutput) {
+          child.signal = node.signal - dLoss;
+        } else {
+          child.signal = child.signal - dLoss;
+        }
+
+        child.wavelength = wavelength;
+        child.useWdm = node.useWdm;
+        child.wdmLoss = node.wdmLoss;
         _recalculate(child);
       }
+    }
+  }
+
+  void _onHeadendPowerChanged(String value) {
+    final newPower = double.tryParse(value) ?? defaultHeadendDbm;
+    if (newPower != root!.signal) {
+      setState(() {
+        root!.signal = newPower;
+        _recalculate(root!);
+      });
     }
   }
 
@@ -309,195 +455,159 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       root!.label =
           _headendNameCtrl.text.isEmpty ? 'EDFA/PON/TR' : _headendNameCtrl.text;
       root!.signal = double.tryParse(_headendDbmCtrl.text) ?? defaultHeadendDbm;
+      root!.wavelength = _selectedWavelength;
+      root!.useWdm = _useWdm;
+      root!.wdmLoss = _wdmLoss;
       _recalculate(root!);
     });
   }
 
-  // ---------- Add N-ary generic children ----------
-  Future<void> _addNChildren(DiagramNode parent) async {
-    final countCtrl = TextEditingController(text: '2');
-    final distanceCtrl = TextEditingController(text: '0.5');
+  Future<void> _addSingleChild(DiagramNode parent) async {
     final labelCtrl = TextEditingController(text: 'Node');
-
-    await showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Add children (N-ary)'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-                controller: countCtrl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Count')),
-            const SizedBox(height: 8),
-            TextField(
-                controller: distanceCtrl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Distance (km)')),
-            const SizedBox(height: 8),
-            TextField(
-                controller: labelCtrl,
-                decoration: const InputDecoration(labelText: 'Base label')),
-          ],
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () {
-              setState(() {
-                final cnt = (int.tryParse(countCtrl.text) ?? 2).clamp(1, 256);
-                final dist = double.tryParse(distanceCtrl.text) ?? 0.5;
-                final base = labelCtrl.text.isEmpty ? 'Node' : labelCtrl.text;
-                final List<DiagramNode> ch = [];
-                for (int i = 0; i < cnt; i++) {
-                  ch.add(DiagramNode(
-                    id: _nodeCounter++,
-                    label: '$base ${i + 1}',
-                    signal: parent.signal - (dist * fiberAttenuationDbPerKm),
-                    distance: dist,
-                    parentId: parent.id,
-                    deviceType: 'leaf',
-                    outputPort: i,
-                  ));
-                }
-                parent.children = ch;
-                parent.deviceType =
-                    parent.isHeadend ? parent.deviceType : 'pass';
-                parent.deviceConfig = null;
-                _recalculate(root!);
-              });
-              Navigator.pop(ctx);
-            },
-            child: const Text('Add'),
-          )
-        ],
-      ),
-    );
-  }
-
-  // ---------- Add Coupler (N-port, generalized) ----------
-  Future<void> _addCoupler(DiagramNode parent) async {
-    if (parent.children.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Remove existing branch before adding device')));
-      return;
-    }
-    final couplerValCtrl = TextEditingController(text: '1.0');
-    final portCountCtrl = TextEditingController(text: '2');
-    final distanceCtrl = TextEditingController(text: '0.5');
-    String section = 'LOSS-15 50';
-    int ratio = 50;
+    final distanceCtrl =
+        TextEditingController(text: parent.isHeadend ? '0.0' : '0.5');
+    String distanceUnit = 'km';
+    bool showDistanceInput = !parent.isHeadend;
 
     await showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(builder: (ctx, setInner) {
         return AlertDialog(
-          title: const Text('Add Coupler'),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Add Child Node',
+              style: TextStyle(fontWeight: FontWeight.bold)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               TextField(
-                  controller: couplerValCtrl,
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
-                  decoration:
-                      const InputDecoration(labelText: 'Coupler value')),
-              const SizedBox(height: 8),
-              TextField(
-                  controller: portCountCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                      labelText: 'Number of ports (2/4/6/8/16)')),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<String>(
-                value: section,
-                items: const [
-                  DropdownMenuItem(
-                      value: 'LOSS-15 50', child: Text('LOSS-15 50')),
-                  DropdownMenuItem(
-                      value: 'LOSS-13 10', child: Text('LOSS-13 10'))
-                ],
-                onChanged: (v) => setInner(() => section = v ?? section),
-                decoration: const InputDecoration(labelText: 'Section'),
+                controller: labelCtrl,
+                decoration: InputDecoration(
+                    labelText: 'Node Label',
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                    prefixIcon: const Icon(Icons.label)),
               ),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<int>(
-                value: ratio,
-                items: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
-                    .map((r) => DropdownMenuItem(value: r, child: Text('$r')))
-                    .toList(),
-                onChanged: (v) => setInner(() => ratio = v ?? ratio),
-                decoration: const InputDecoration(labelText: 'Ratio'),
+              const SizedBox(height: 16),
+              if (showDistanceInput) ...[
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: TextField(
+                        controller: distanceCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        decoration: InputDecoration(
+                          labelText: 'Distance',
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                          prefixIcon: const Icon(Icons.straighten),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 2,
+                      child: DropdownButtonFormField<String>(
+                        value: distanceUnit,
+                        decoration: InputDecoration(
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12)),
+                        ),
+                        items: ['km', 'm'].map((String unit) {
+                          return DropdownMenuItem<String>(
+                            value: unit,
+                            child: Text(unit),
+                          );
+                        }).toList(),
+                        onChanged: (String? newValue) {
+                          setInner(() {
+                            distanceUnit = newValue!;
+                          });
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+              ],
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.blue.shade200),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.info, color: Colors.blue, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Input Power: ${parent.signal.toStringAsFixed(2)} dBm\n'
+                        '${showDistanceInput ? 'Fiber Loss: 0.25 dB/km' : 'First block - no distance loss'}',
+                        style:
+                            const TextStyle(color: Colors.blue, fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 8),
-              TextField(
-                  controller: distanceCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration:
-                      const InputDecoration(labelText: 'Distance (km)')),
             ],
           ),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel')),
+                child: const Text('Cancel', style: TextStyle(fontSize: 16))),
             ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF2E7D32),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12))),
               onPressed: () {
                 setState(() {
-                  final couplerVal =
-                      double.tryParse(couplerValCtrl.text) ?? 1.0;
-                  final dist = double.tryParse(distanceCtrl.text) ?? 0.5;
-                  final portCount = [2, 4, 6, 8, 16]
-                          .contains(int.tryParse(portCountCtrl.text ?? '2'))
-                      ? int.parse(portCountCtrl.text)
-                      : 2;
+                  double distance = showDistanceInput
+                      ? (double.tryParse(distanceCtrl.text) ?? 0.5)
+                      : 0.0;
 
-                  final calc = CouplerCalculator(couplerVal);
-                  final list = calc.calculateLoss();
-                  final sec = list.firstWhere((s) => s['section'] == section,
-                      orElse: () => list[0]);
-                  final data =
-                      (sec['data'] as List).cast<Map<String, dynamic>>();
-                  final entry = data.firstWhere((e) => e['ratio'] == ratio,
-                      orElse: () => data.last);
-                  final v1 = (entry['val1'] as num).toDouble();
-                  final v2 = (entry['val2'] as num).toDouble();
-
-                  // Calculate losses for N ports: distribute v1 and v2 across all
-                  List<double> losses = [];
-                  if (portCount == 2) {
-                    losses = [v1, v2];
-                  } else {
-                    final average = ((v1 + v2) / 2);
-                    for (int i = 0; i < portCount; i++) {
-                      losses.add(average);
-                    }
+                  if (showDistanceInput && distanceUnit == 'm') {
+                    distance = distance / 1000;
                   }
 
-                  parent.children = List.generate(
-                      portCount,
-                      (i) => DiagramNode(
-                            id: _nodeCounter++,
-                            label: 'Port ${i + 1}',
-                            signal: parent.signal +
-                                losses[i] -
-                                (dist * fiberAttenuationDbPerKm),
-                            distance: dist,
-                            parentId: parent.id,
-                            deviceType: 'leaf',
-                            outputPort: i,
-                            deviceLoss: losses[i].abs(),
-                          ));
-                  parent.deviceType = 'coupler';
-                  parent.deviceConfig =
-                      '$section::${ratio.toString()}::${couplerVal.toStringAsFixed(3)}::N$portCount';
+                  final label =
+                      labelCtrl.text.isEmpty ? 'Node' : labelCtrl.text;
+                  final fiberLoss = distance * fiberAttenuationDbPerKm;
+                  final outputPower = showDistanceInput
+                      ? (parent.signal - fiberLoss)
+                      : parent.signal;
+
+                  final child = DiagramNode(
+                    id: _nodeCounter++,
+                    label: label,
+                    signal: outputPower,
+                    distance: distance,
+                    parentId: parent.id,
+                    deviceType: 'leaf',
+                    outputPort: parent.children.length,
+                    wavelength: parent.wavelength,
+                    useWdm: parent.useWdm,
+                    wdmLoss: parent.wdmLoss,
+                    fiberLoss: fiberLoss,
+                  );
+
+                  parent.children.add(child);
+                  if (parent.isLeaf) {
+                    parent.deviceType = 'pass';
+                  }
                   _recalculate(root!);
                 });
                 Navigator.pop(ctx);
               },
-              child: const Text('Add Coupler'),
+              child: const Text('Add Node',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             )
           ],
         );
@@ -505,436 +615,962 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     );
   }
 
-  // ---------- Add Splitter (dropdown) ----------
-  Future<void> _addSplitter(DiagramNode parent) async {
-    if (parent.children.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Remove existing branch before adding device')));
-      return;
-    }
-    final splitterValCtrl = TextEditingController(text: '1.0');
+  Future<void> _addCoupler(DiagramNode parent) async {
     final distanceCtrl = TextEditingController(text: '0.5');
-    String section = 'LOSS-15 50';
-    int split = 2;
-    final splits = [2, 4, 8, 16, 32, 64];
+    int ratio = 50;
+    bool showWdmWarning = false;
+    String distanceUnit = 'km';
+    bool showDistanceInput = !parent.isHeadend;
+    distanceCtrl.text = showDistanceInput ? '0.5' : '0.0';
 
     await showDialog(
-        context: context,
-        builder: (ctx) => StatefulBuilder(builder: (ctx, setInner) {
-              return AlertDialog(
-                title: const Text('Add Splitter'),
-                content: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextField(
-                        controller: splitterValCtrl,
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true),
-                        decoration:
-                            const InputDecoration(labelText: 'Splitter value')),
-                    const SizedBox(height: 8),
-                    DropdownButtonFormField<String>(
-                      value: section,
-                      items: const [
-                        DropdownMenuItem(
-                            value: 'LOSS-15 50', child: Text('LOSS-15 50')),
-                        DropdownMenuItem(
-                            value: 'LOSS-13 10', child: Text('LOSS-13 10'))
-                      ],
-                      onChanged: (v) => setInner(() => section = v ?? section),
-                      decoration: const InputDecoration(labelText: 'Section'),
-                    ),
-                    const SizedBox(height: 8),
-                    DropdownButtonFormField<int>(
-                      value: split,
-                      items: splits
-                          .map((s) =>
-                              DropdownMenuItem(value: s, child: Text('1x$s')))
-                          .toList(),
-                      onChanged: (v) => setInner(() => split = v ?? split),
-                      decoration: const InputDecoration(labelText: 'Split'),
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                        controller: distanceCtrl,
-                        keyboardType: TextInputType.number,
-                        decoration:
-                            const InputDecoration(labelText: 'Distance (km)')),
-                  ],
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setInner) {
+        void checkWdmValidation() {
+          final is1310Wavelength = _selectedWavelength == '1310';
+          final isWdmEnabled = _useWdm;
+          final isInvalidCombination = is1310Wavelength && isWdmEnabled;
+          setInner(() {
+            showWdmWarning = isInvalidCombination;
+          });
+        }
+
+        checkWdmValidation();
+
+        return AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                    color: const Color(0xFF0288D1).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8)),
+                child: const Icon(Icons.call_split, color: Color(0xFF0288D1)),
+              ),
+              const SizedBox(width: 12),
+              const Text('Add Coupler',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Input Power: ${parent.signal.toStringAsFixed(2)} dBm',
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey.shade700)),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<int>(
+                  value: ratio,
+                  decoration: InputDecoration(
+                      labelText: 'Split Ratio',
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      prefixIcon: const Icon(Icons.tune),
+                      filled: true,
+                      fillColor: Colors.grey.shade50),
+                  items: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+                      .map((r) => DropdownMenuItem(
+                          value: r,
+                          child: Text('$r : ${100 - r}',
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w500))))
+                      .toList(),
+                  onChanged: (v) {
+                    setInner(() => ratio = v ?? ratio);
+                    checkWdmValidation();
+                  },
                 ),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text('Cancel')),
-                  ElevatedButton(
-                    onPressed: () {
+                const SizedBox(height: 16),
+                if (showDistanceInput) ...[
+                  Row(
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: TextField(
+                          controller: distanceCtrl,
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                          decoration: InputDecoration(
+                            labelText: 'Distance',
+                            border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                            prefixIcon: const Icon(Icons.straighten),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        flex: 2,
+                        child: DropdownButtonFormField<String>(
+                          value: distanceUnit,
+                          decoration: InputDecoration(
+                            border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                          ),
+                          items: ['km', 'm'].map((String unit) {
+                            return DropdownMenuItem<String>(
+                              value: unit,
+                              child: Text(unit),
+                            );
+                          }).toList(),
+                          onChanged: (String? newValue) {
+                            setInner(() {
+                              distanceUnit = newValue!;
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.blue.shade200),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.info, color: Colors.blue, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Input Power: ${parent.signal.toStringAsFixed(2)} dBm\n'
+                              '${showDistanceInput ? 'Fiber Loss: 0.25 dB/km' : 'First block - no distance loss'}',
+                              style: const TextStyle(
+                                  color: Colors.blue, fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Builder(
+                        builder: (context) {
+                          final losses = _calculateCouplerLosses(
+                              ratio, parent.signal, parent.wavelength);
+                          return Column(
+                            children: [
+                              Text(
+                                'Expected Output: ${(parent.signal + losses[0]).toStringAsFixed(2)} dBm : ${(parent.signal + losses[1]).toStringAsFixed(2)} dBm',
+                                style: const TextStyle(
+                                  color: Colors.blue,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              Text(
+                                'Losses: ${losses[2].toStringAsFixed(2)} dB : ${losses[3].toStringAsFixed(2)} dB',
+                                style: const TextStyle(
+                                    color: Colors.blue, fontSize: 11),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+                if (showWdmWarning) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.orange.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.warning,
+                            color: Colors.orange, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'WDM is only compatible with 1550nm wavelength and 15-50 configuration',
+                            style: TextStyle(
+                              color: Colors.orange.shade800,
+                              fontWeight: FontWeight.w500,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel', style: TextStyle(fontSize: 16))),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor:
+                      showWdmWarning ? Colors.grey : const Color(0xFF0288D1),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12))),
+              onPressed: showWdmWarning
+                  ? null
+                  : () {
                       setState(() {
-                        final splitterVal =
-                            double.tryParse(splitterValCtrl.text) ?? 1.0;
-                        final dist = double.tryParse(distanceCtrl.text) ?? 0.5;
-                        final calc = SplitterCalculator(splitterVal);
-                        final map = calc.calculateLoss();
-                        final sec = map[section]!;
-                        final entry = sec.firstWhere((e) => e['split'] == split,
-                            orElse: () => sec.first);
-                        final perLoss = (entry['value'] as num).toDouble();
+                        double distance = showDistanceInput
+                            ? (double.tryParse(distanceCtrl.text) ?? 0.5)
+                            : 0.0;
 
-                        parent.children = List.generate(
-                            split,
-                            (i) => DiagramNode(
-                                  id: _nodeCounter++,
-                                  label: 'Port ${i + 1}',
-                                  signal: parent.signal +
-                                      perLoss -
-                                      (dist * fiberAttenuationDbPerKm),
-                                  distance: dist,
-                                  parentId: parent.id,
-                                  deviceType: 'leaf',
-                                  outputPort: i,
-                                  deviceLoss: perLoss.abs(),
-                                ));
+                        if (showDistanceInput && distanceUnit == 'm') {
+                          distance = distance / 1000;
+                        }
 
-                        parent.deviceType = 'splitter';
-                        parent.deviceConfig =
-                            '$section::${split.toString()}::${splitterVal.toStringAsFixed(3)}';
+                        final fiberLoss = distance * fiberAttenuationDbPerKm;
+                        final inputPower = parent.signal;
+
+                        // In _addCoupler method, replace this part:
+                        final losses = _calculateCouplerLosses(
+                            ratio, parent.signal, parent.wavelength);
+                        final output1Loss = losses[
+                            0]; // This is the actual loss value (negative)
+                        final output2Loss = losses[
+                            1]; // This is the actual loss value (negative)
+
+                        final wdmLoss = parent.useWdm ? parent.wdmLoss : 0.0;
+
+// Calculate output signals by adding the loss to input power
+                        final output1Signal = showDistanceInput
+                            ? (parent.signal +
+                                output1Loss -
+                                fiberLoss) // loss is negative, so it subtracts
+                            : (parent.signal + output1Loss);
+
+                        final output2Signal = showDistanceInput
+                            ? (parent.signal +
+                                output2Loss -
+                                fiberLoss) // loss is negative, so it subtracts
+                            : (parent.signal + output2Loss);
+                        final output1 = DiagramNode(
+                          id: _nodeCounter++,
+                          label: 'Coupler $ratio',
+                          signal: output1Signal,
+                          distance: distance,
+                          parentId: parent.id,
+                          deviceType: 'coupler',
+                          deviceConfig: '$ratio::1.0',
+                          wavelength: parent.wavelength,
+                          useWdm: parent.useWdm,
+                          wdmLoss: parent.wdmLoss,
+                          couplerRatio: ratio,
+                          isCouplerOutput: true,
+                          deviceLoss: losses[2].abs(),
+                          fiberLoss: fiberLoss,
+                        );
+
+                        final output2 = DiagramNode(
+                          id: _nodeCounter++,
+                          label: 'Coupler ${100 - ratio}',
+                          signal: output2Signal,
+                          distance: distance,
+                          parentId: parent.id,
+                          deviceType: 'coupler',
+                          deviceConfig: '$ratio::1.0',
+                          wavelength: parent.wavelength,
+                          useWdm: parent.useWdm,
+                          wdmLoss: parent.wdmLoss,
+                          couplerRatio: 100 - ratio,
+                          isCouplerOutput: true,
+                          deviceLoss: losses[3].abs(),
+                          fiberLoss: fiberLoss,
+                        );
+
+                        parent.children.add(output1);
+                        parent.children.add(output2);
                         _recalculate(root!);
                       });
                       Navigator.pop(ctx);
                     },
-                    child: const Text('Add Splitter'),
-                  )
-                ],
-              );
-            }));
+              child: const Text('Add Coupler',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            )
+          ],
+        );
+      }),
+    );
   }
 
-  // ---------- Edit Node / Device ----------
+  Future<void> _addSplitter(DiagramNode parent) async {
+    final distanceCtrl = TextEditingController(text: '0.5');
+    int split = 2;
+    final splits = [2, 4, 8, 16, 32, 64];
+    String distanceUnit = 'km';
+    bool showDistanceInput = !parent.isHeadend;
+    distanceCtrl.text = showDistanceInput ? '0.5' : '0.0';
+
+    // Check if this is being added below a coupler
+    bool isBelowCoupler = parent.isCouplerOutput;
+    double inputPower = parent.signal;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setInner) {
+        return AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF7B1FA2).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.account_tree, color: Color(0xFF7B1FA2)),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                isBelowCoupler
+                    ? 'Add Splitter to ${parent.label}'
+                    : 'Add Splitter',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Show previous block info when adding below coupler
+                if (isBelowCoupler) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.blue.shade200),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Previous Block: ${parent.label}',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.blue,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Input Power: ${inputPower.toStringAsFixed(2)} dBm',
+                          style:
+                              const TextStyle(color: Colors.blue, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+
+                Text('Input Power: ${parent.signal.toStringAsFixed(2)} dBm',
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey.shade700)),
+                const SizedBox(height: 16),
+
+                DropdownButtonFormField<int>(
+                  value: split,
+                  decoration: InputDecoration(
+                    labelText: 'Split Configuration',
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                    prefixIcon: const Icon(Icons.tune),
+                    filled: true,
+                    fillColor: Colors.grey.shade50,
+                  ),
+                  items: splits
+                      .map((s) => DropdownMenuItem(
+                            value: s,
+                            child: Text('1x$s Split',
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w500)),
+                          ))
+                      .toList(),
+                  onChanged: (v) => setInner(() => split = v ?? split),
+                ),
+                const SizedBox(height: 16),
+
+                if (showDistanceInput) ...[
+                  Row(
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: TextField(
+                          controller: distanceCtrl,
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
+                          decoration: InputDecoration(
+                            labelText: 'Distance',
+                            border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                            prefixIcon: const Icon(Icons.straighten),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        flex: 2,
+                        child: DropdownButtonFormField<String>(
+                          value: distanceUnit,
+                          decoration: InputDecoration(
+                            border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                          ),
+                          items: ['km', 'm'].map((String unit) {
+                            return DropdownMenuItem<String>(
+                              value: unit,
+                              child: Text(unit),
+                            );
+                          }).toList(),
+                          onChanged: (String? newValue) {
+                            setInner(() {
+                              distanceUnit = newValue!;
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                ],
+
+                // Calculation preview
+                Builder(
+                  builder: (context) {
+                    double distance = showDistanceInput
+                        ? (double.tryParse(distanceCtrl.text) ?? 0.5)
+                        : 0.0;
+
+                    if (showDistanceInput && distanceUnit == 'm') {
+                      distance = distance / 1000;
+                    }
+
+                    final fiberLoss = distance * fiberAttenuationDbPerKm;
+
+                    // Use default splitter value of 1.0 since we removed the input field
+                    final splitterVal = 1.0;
+
+                    final calc = SplitterCalculator(splitterVal);
+                    final all = calc.calculateLoss();
+                    final section = parent.wavelength == '1310'
+                        ? 'LOSS-13 10'
+                        : 'LOSS-15 50';
+                    final sec = all[section]!;
+                    final entry = sec.firstWhere(
+                      (e) => e['split'] == split,
+                      orElse: () => sec.first,
+                    );
+                    final perLoss = (entry['value'] as num).toDouble();
+
+                    final wdmLoss = parent.useWdm ? parent.wdmLoss : 0.0;
+                    final adjustedLoss = perLoss - wdmLoss;
+
+                    // Calculate output signal
+                    final outputSignal = showDistanceInput
+                        ? (parent.signal + adjustedLoss - fiberLoss)
+                        : (parent.signal + adjustedLoss);
+
+                    return Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.purple.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.purple.shade200),
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.info,
+                                  color: Colors.purple, size: 20),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Using ${parent.wavelength}nm wavelength${parent.useWdm ? ' + WDM (${parent.wdmLoss}dB)' : ''}\n'
+                                  '${showDistanceInput ? 'Fiber Loss: 0.25 dB/km' : 'First block - no distance loss'}',
+                                  style: const TextStyle(
+                                    color: Colors.purple,
+                                    fontWeight: FontWeight.w500,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (isBelowCoupler) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              'Splitter Loss: ${adjustedLoss.toStringAsFixed(2)} dB',
+                              style: const TextStyle(
+                                color: Colors.purple,
+                                fontSize: 12,
+                              ),
+                            ),
+                            Text(
+                              'Output Power: ${outputSignal.toStringAsFixed(2)} dBm',
+                              style: const TextStyle(
+                                color: Colors.purple,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel', style: TextStyle(fontSize: 16)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF7B1FA2),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+              onPressed: () {
+                setState(() {
+                  double distance = showDistanceInput
+                      ? (double.tryParse(distanceCtrl.text) ?? 0.5)
+                      : 0.0;
+
+                  if (showDistanceInput && distanceUnit == 'm') {
+                    distance = distance / 1000;
+                  }
+
+                  final fiberLoss = distance * fiberAttenuationDbPerKm;
+
+                  // Use default splitter value of 1.0
+                  final splitterVal = 1.0;
+
+                  final calc = SplitterCalculator(splitterVal);
+                  final all = calc.calculateLoss();
+                  final section =
+                      parent.wavelength == '1310' ? 'LOSS-13 10' : 'LOSS-15 50';
+                  final sec = all[section]!;
+                  final entry = sec.firstWhere(
+                    (e) => e['split'] == split,
+                    orElse: () => sec.first,
+                  );
+                  final perLoss = (entry['value'] as num).toDouble();
+
+                  final wdmLoss = parent.useWdm ? parent.wdmLoss : 0.0;
+                  final adjustedLoss = perLoss - wdmLoss;
+
+                  final outputSignal = showDistanceInput
+                      ? (parent.signal + adjustedLoss - fiberLoss)
+                      : (parent.signal + adjustedLoss);
+
+                  for (int i = 0; i < split; i++) {
+                    final outputNode = DiagramNode(
+                      id: _nodeCounter++,
+                      label: 'Splitter${i + 1}',
+                      signal: outputSignal,
+                      distance: distance,
+                      parentId: parent.id,
+                      deviceType: 'splitter',
+                      deviceConfig: '$split::$splitterVal',
+                      wavelength: parent.wavelength,
+                      useWdm: parent.useWdm,
+                      wdmLoss: parent.wdmLoss,
+                      isSplitterOutput: true,
+                      deviceLoss: adjustedLoss.abs(),
+                      fiberLoss: fiberLoss,
+                    );
+                    parent.children.add(outputNode);
+                  }
+                  _recalculate(root!);
+                });
+                Navigator.pop(ctx);
+              },
+              child: Text(
+                isBelowCoupler ? 'Add Splitter Below' : 'Add Splitter',
+                style:
+                    const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            )
+          ],
+        );
+      }),
+    );
+  }
+
   Future<void> _editNode(DiagramNode node) async {
-    if (node.isCoupler) {
-      // parse config
-      String section = 'LOSS-15 50';
-      int ratio = 50;
-      double couplerVal = 1.0;
-      double childDist =
-          node.children.isNotEmpty ? node.children[0].distance : 0.5;
-
-      if (node.deviceConfig != null) {
-        final p = node.deviceConfig!.split('::');
-        if (p.isNotEmpty) section = p[0];
-        if (p.length > 1) ratio = int.tryParse(p[1]) ?? ratio;
-        if (p.length > 2) couplerVal = double.tryParse(p[2]) ?? couplerVal;
-      }
-
-      final couplerCtrl = TextEditingController(text: couplerVal.toString());
-      final distanceCtrl = TextEditingController(text: childDist.toString());
-      String sSection = section;
-      int sRatio = ratio;
+    if (node.isCoupler && node.isCouplerOutput) {
+      int currentRatio = node.couplerRatio ?? 50;
+      bool showWdmWarning = false;
 
       await showDialog(
-          context: context,
-          builder: (ctx) => StatefulBuilder(builder: (ctx, setInner) {
-                return AlertDialog(
-                  title: const Text('Edit Coupler'),
-                  content: Column(mainAxisSize: MainAxisSize.min, children: [
-                    TextField(
-                        controller: couplerCtrl,
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true),
-                        decoration:
-                            const InputDecoration(labelText: 'Coupler value')),
-                    const SizedBox(height: 8),
-                    DropdownButtonFormField<String>(
-                        value: sSection,
-                        items: const [
-                          DropdownMenuItem(
-                              value: 'LOSS-15 50', child: Text('LOSS-15 50')),
-                          DropdownMenuItem(
-                              value: 'LOSS-13 10', child: Text('LOSS-13 10'))
-                        ],
-                        onChanged: (v) =>
-                            setInner(() => sSection = v ?? sSection),
-                        decoration:
-                            const InputDecoration(labelText: 'Section')),
-                    const SizedBox(height: 8),
-                    DropdownButtonFormField<int>(
-                        value: sRatio,
-                        items: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
-                            .map((r) =>
-                                DropdownMenuItem(value: r, child: Text('$r')))
-                            .toList(),
-                        onChanged: (v) => setInner(() => sRatio = v ?? sRatio),
-                        decoration: const InputDecoration(labelText: 'Ratio')),
-                    const SizedBox(height: 8),
-                    TextField(
-                        controller: distanceCtrl,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
-                            labelText: 'Distance (km) for outputs')),
-                  ]),
-                  actions: [
-                    TextButton(
-                        onPressed: () => Navigator.pop(ctx),
-                        child: const Text('Cancel')),
-                    ElevatedButton(
-                        onPressed: () {
-                          setState(() {
-                            final newVal =
-                                double.tryParse(couplerCtrl.text) ?? couplerVal;
-                            final newDist =
-                                double.tryParse(distanceCtrl.text) ?? childDist;
-                            final calc = CouplerCalculator(newVal);
-                            final list = calc.calculateLoss();
-                            final sec = list.firstWhere(
-                                (s) => s['section'] == sSection,
-                                orElse: () => list[0]);
-                            final data = (sec['data'] as List)
-                                .cast<Map<String, dynamic>>();
-                            final entry = data.firstWhere(
-                                (e) => e['ratio'] == sRatio,
-                                orElse: () => data.last);
-                            final v1 = (entry['val1'] as num).toDouble();
-                            final v2 = (entry['val2'] as num).toDouble();
+        context: context,
+        builder: (ctx) => StatefulBuilder(builder: (ctx, setInner) {
+          void checkWdmValidation() {
+            final is1310Wavelength = _selectedWavelength == '1310';
+            final isWdmEnabled = _useWdm;
+            final isInvalidCombination = is1310Wavelength && isWdmEnabled;
+            setInner(() {
+              showWdmWarning = isInvalidCombination;
+            });
+          }
 
-                            // update children count to 2 if necessary
-                            if (node.children.length < 2) {
-                              node.children = [
-                                DiagramNode(
-                                    id: _nodeCounter++,
-                                    label: 'Port 1',
-                                    signal: node.signal +
-                                        v1 -
-                                        (newDist * fiberAttenuationDbPerKm),
-                                    distance: newDist,
-                                    parentId: node.id,
-                                    deviceType: 'leaf',
-                                    outputPort: 0,
-                                    deviceLoss: v1.abs()),
-                                DiagramNode(
-                                    id: _nodeCounter++,
-                                    label: 'Port 2',
-                                    signal: node.signal +
-                                        v2 -
-                                        (newDist * fiberAttenuationDbPerKm),
-                                    distance: newDist,
-                                    parentId: node.id,
-                                    deviceType: 'leaf',
-                                    outputPort: 1,
-                                    deviceLoss: v2.abs()),
-                              ];
-                            } else {
-                              node.children[0].distance = newDist;
-                              node.children[0].deviceLoss = v1.abs();
-                              node.children[0].signal = node.signal +
-                                  v1 -
-                                  (newDist * fiberAttenuationDbPerKm);
-                              node.children[1].distance = newDist;
-                              node.children[1].deviceLoss = v2.abs();
-                              node.children[1].signal = node.signal +
-                                  v2 -
-                                  (newDist * fiberAttenuationDbPerKm);
-                            }
-                            node.deviceConfig =
-                                '$sSection::${sRatio.toString()}::${newVal.toStringAsFixed(3)}';
-                            _recalculate(root!);
-                          });
+          checkWdmValidation();
+
+          return AlertDialog(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                      color: const Color(0xFF0288D1).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8)),
+                  child: const Icon(Icons.edit, color: Color(0xFF0288D1)),
+                ),
+                const SizedBox(width: 12),
+                const Text('Edit Coupler Output',
+                    style: TextStyle(fontWeight: FontWeight.bold)),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Text('Current Ratio: $currentRatio',
+                    style: const TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 16),
+                Text('Note: Changing ratio will affect both outputs',
+                    style:
+                        TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+                if (showWdmWarning) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.orange.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.warning,
+                            color: Colors.orange, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'WDM is only compatible with 1550nm wavelength and 15-50 configuration',
+                            style: TextStyle(
+                              color: Colors.orange.shade800,
+                              fontWeight: FontWeight.w500,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ]),
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel',
+                      style: TextStyle(fontSize: 16))), // FIXED: = to :
+              ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: showWdmWarning
+                          ? Colors.grey
+                          : const Color(0xFF0288D1),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 24, vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12))),
+                  onPressed: showWdmWarning
+                      ? null
+                      : () {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                  'Cannot edit individual coupler output ratio. Delete and recreate coupler to change ratio.'),
+                              duration: Duration(seconds: 3),
+                            ),
+                          );
                           Navigator.pop(ctx);
                         },
-                        child: const Text('Save'))
-                  ],
-                );
-              }));
+                  child: const Text('OK',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold)))
+            ],
+          );
+        }),
+      );
     } else if (node.isSplitter) {
-      String section = 'LOSS-15 50';
       int split = 2;
       double splitterVal = 1.0;
-      double childDist =
-          node.children.isNotEmpty ? node.children[0].distance : 0.5;
 
       if (node.deviceConfig != null) {
         final p = node.deviceConfig!.split('::');
-        if (p.isNotEmpty) section = p[0];
-        if (p.length > 1) split = int.tryParse(p[1]) ?? split;
-        if (p.length > 2) splitterVal = double.tryParse(p[2]) ?? splitterVal;
+        if (p.isNotEmpty) split = int.tryParse(p[0]) ?? split;
+        if (p.length > 1) splitterVal = double.tryParse(p[1]) ?? splitterVal;
       }
 
       final splitterCtrl = TextEditingController(text: splitterVal.toString());
-      final distanceCtrl = TextEditingController(text: childDist.toString());
       int sSplit = split;
-      String sSection = section;
       final splits = [2, 4, 8, 16, 32, 64];
 
       await showDialog(
-          context: context,
-          builder: (ctx) => StatefulBuilder(builder: (ctx, setInner) {
-                return AlertDialog(
-                  title: const Text('Edit Splitter'),
-                  content: Column(mainAxisSize: MainAxisSize.min, children: [
-                    TextField(
-                        controller: splitterCtrl,
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true),
-                        decoration:
-                            const InputDecoration(labelText: 'Splitter value')),
-                    const SizedBox(height: 8),
-                    DropdownButtonFormField<String>(
-                        value: sSection,
-                        items: const [
-                          DropdownMenuItem(
-                              value: 'LOSS-15 50', child: Text('LOSS-15 50')),
-                          DropdownMenuItem(
-                              value: 'LOSS-13 10', child: Text('LOSS-13 10'))
-                        ],
-                        onChanged: (v) =>
-                            setInner(() => sSection = v ?? sSection),
-                        decoration:
-                            const InputDecoration(labelText: 'Section')),
-                    const SizedBox(height: 8),
-                    DropdownButtonFormField<int>(
-                        value: sSplit,
-                        items: splits
-                            .map((s) =>
-                                DropdownMenuItem(value: s, child: Text('1x$s')))
-                            .toList(),
-                        onChanged: (v) => setInner(() => sSplit = v ?? sSplit),
-                        decoration: const InputDecoration(labelText: 'Split')),
-                    const SizedBox(height: 8),
-                    TextField(
-                        controller: distanceCtrl,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
-                            labelText: 'Distance (km) for outputs')),
-                  ]),
-                  actions: [
-                    TextButton(
-                        onPressed: () => Navigator.pop(ctx),
-                        child: const Text('Cancel')),
-                    ElevatedButton(
-                        onPressed: () {
-                          setState(() {
-                            final newVal = double.tryParse(splitterCtrl.text) ??
-                                splitterVal;
-                            final newDist =
-                                double.tryParse(distanceCtrl.text) ?? childDist;
-                            final calc = SplitterCalculator(newVal);
-                            final all = calc.calculateLoss();
-                            final sec = all[sSection]!;
-                            final entry = sec.firstWhere(
-                                (e) => e['split'] == sSplit,
-                                orElse: () => sec.first);
-                            final per = (entry['value'] as num).toDouble();
-
-                            // recreate children if count differs
-                            if (node.children.length != sSplit) {
-                              node.children = List.generate(
-                                  sSplit,
-                                  (i) => DiagramNode(
-                                        id: _nodeCounter++,
-                                        label: 'Port ${i + 1}',
-                                        signal: node.signal +
-                                            per -
-                                            (newDist * fiberAttenuationDbPerKm),
-                                        distance: newDist,
-                                        parentId: node.id,
-                                        deviceType: 'leaf',
-                                        outputPort: i,
-                                        deviceLoss: per.abs(),
-                                      ));
-                            } else {
-                              for (int i = 0; i < node.children.length; i++) {
-                                node.children[i].distance = newDist;
-                                node.children[i].deviceLoss = per.abs();
-                                node.children[i].signal = node.signal +
-                                    per -
-                                    (newDist * fiberAttenuationDbPerKm);
-                              }
-                            }
-
-                            node.deviceConfig =
-                                '$sSection::${sSplit.toString()}::${newVal.toStringAsFixed(3)}';
-                            _recalculate(root!);
-                          });
-                          Navigator.pop(ctx);
-                        },
-                        child: const Text('Save'))
-                  ],
-                );
-              }));
+        context: context,
+        builder: (ctx) => StatefulBuilder(builder: (ctx, setInner) {
+          return AlertDialog(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                      color: const Color(0xFF7B1FA2).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8)),
+                  child: const Icon(Icons.edit, color: Color(0xFF7B1FA2)),
+                ),
+                const SizedBox(width: 12),
+                const Text('Edit Splitter',
+                    style: TextStyle(fontWeight: FontWeight.bold)),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                TextField(
+                  controller: splitterCtrl,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: InputDecoration(
+                      labelText: 'Splitter Value',
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      prefixIcon: const Icon(Icons.settings_input_component),
+                      filled: true,
+                      fillColor: Colors.grey.shade50),
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<int>(
+                  value: sSplit,
+                  decoration: InputDecoration(
+                      labelText: 'Split Configuration',
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      prefixIcon: const Icon(Icons.tune),
+                      filled: true,
+                      fillColor: Colors.grey.shade50),
+                  items: splits
+                      .map((s) => DropdownMenuItem(
+                          value: s,
+                          child: Text('1x$s Split',
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w500))))
+                      .toList(),
+                  onChanged: (v) => setInner(() => sSplit = v ?? sSplit),
+                ),
+              ]),
+            ),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel', style: TextStyle(fontSize: 16))),
+              ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF7B1FA2),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 24, vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12))),
+                  onPressed: () {
+                    setState(() {
+                      final newVal =
+                          double.tryParse(splitterCtrl.text) ?? splitterVal;
+                      node.deviceConfig =
+                          '$sSplit::${newVal.toStringAsFixed(3)}';
+                      node.label = '1x$sSplit Splitter';
+                      _recalculate(root!);
+                    });
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('Save',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold)))
+            ],
+          );
+        }),
+      );
     } else {
-      // generic node editing
       final labelCtrl = TextEditingController(text: node.label);
       final distCtrl = TextEditingController(text: node.distance.toString());
       await showDialog(
-          context: context,
-          builder: (ctx) => AlertDialog(
-                title: const Text('Edit Node'),
-                content: Column(mainAxisSize: MainAxisSize.min, children: [
-                  TextField(
-                      controller: labelCtrl,
-                      decoration: const InputDecoration(labelText: 'Label')),
-                  const SizedBox(height: 8),
-                  TextField(
-                      controller: distCtrl,
-                      keyboardType: TextInputType.number,
-                      decoration:
-                          const InputDecoration(labelText: 'Distance (km)')),
-                ]),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text('Cancel')),
-                  ElevatedButton(
-                      onPressed: () {
-                        setState(() {
-                          node.label = labelCtrl.text;
-                          node.distance =
-                              double.tryParse(distCtrl.text) ?? node.distance;
-                          _recalculate(root!);
-                        });
-                        Navigator.pop(ctx);
-                      },
-                      child: const Text('Save'))
-                ],
-              ));
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Edit Node',
+              style: TextStyle(fontWeight: FontWeight.bold)),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+              controller: labelCtrl,
+              decoration: InputDecoration(
+                  labelText: 'Label',
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  prefixIcon: const Icon(Icons.label)),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: distCtrl,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                  labelText: 'Distance (km)',
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  prefixIcon: const Icon(Icons.straighten)),
+            ),
+          ]),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel', style: TextStyle(fontSize: 16))),
+            ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF2E7D32),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 24, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12))),
+                onPressed: () {
+                  setState(() {
+                    node.label = labelCtrl.text;
+                    node.distance =
+                        double.tryParse(distCtrl.text) ?? node.distance;
+                    _recalculate(root!);
+                  });
+                  Navigator.pop(ctx);
+                },
+                child: const Text('Save',
+                    style:
+                        TextStyle(fontSize: 16, fontWeight: FontWeight.bold)))
+          ],
+        ),
+      );
     }
   }
 
-  // ---------- Delete Entire Branch (only allowed) ----------
-  void _deleteBranch(DiagramNode node) {
+  void _deleteNode(DiagramNode node) {
     if (node.parentId == null) {
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('Cannot delete headend')));
       return;
     }
+
+    if (node.isCouplerOutput) {
+      final parent = _findNode(root, node.parentId!);
+      if (parent != null) {
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Text('Delete Coupler Outputs?',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+            content: const Text(
+                'This will delete both coupler outputs and all their descendants.'),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel', style: TextStyle(fontSize: 16))),
+              ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 24, vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12))),
+                  onPressed: () {
+                    setState(() {
+                      parent.children
+                          .removeWhere((child) => child.isCouplerOutput);
+                      _recalculate(root!);
+                    });
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('Delete Both',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold)))
+            ],
+          ),
+        );
+        return;
+      }
+    }
+
     showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-              title: const Text('Delete Branch?'),
-              content: Text(
-                  'Delete "${node.label}" and ${_countDescendants(node)} descendant(s)? Note: single-leaf deletion not allowed.'),
-              actions: [
-                TextButton(
-                    onPressed: () => Navigator.pop(ctx),
-                    child: const Text('Cancel')),
-                ElevatedButton(
-                    onPressed: () {
-                      setState(() {
-                        final parent = _findNode(root, node.parentId!);
-                        if (parent != null) {
-                          parent.children = parent.children
-                              .where((c) => c.id != node.id)
-                              .toList();
-                          if (parent.children.isEmpty && !parent.isHeadend) {
-                            parent.deviceType = 'leaf';
-                            parent.deviceConfig = null;
-                          }
-                          _recalculate(root!);
-                        }
-                      });
-                      Navigator.pop(ctx);
-                    },
-                    child: const Text('Delete'))
-              ],
-            ));
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Delete Node?',
+            style: TextStyle(fontWeight: FontWeight.bold)),
+        content: Text(
+            'Delete "${node.label}" and ${_countDescendants(node)} descendant(s)?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel', style: TextStyle(fontSize: 16))),
+          ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12))),
+              onPressed: () {
+                setState(() {
+                  final parent = _findNode(root, node.parentId!);
+                  if (parent != null) {
+                    parent.children.removeWhere((c) => c.id == node.id);
+                    _recalculate(root!);
+                  }
+                });
+                Navigator.pop(ctx);
+              },
+              child: const Text('Delete',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)))
+        ],
+      ),
+    );
   }
 
   int _countDescendants(DiagramNode node) {
@@ -953,77 +1589,137 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     return null;
   }
 
-  // ---------- Node option sheet ----------
   void _showNodeOptions(DiagramNode node) {
     showModalBottomSheet(
-        context: context,
-        shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-        builder: (ctx) => SafeArea(
-                child: Wrap(children: [
-              ListTile(
-                  leading: const Icon(Icons.layers),
-                  title: const Text('Add Children (N-ary)'),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _addNChildren(node);
-                  }),
-              ListTile(
-                  leading: const Icon(Icons.call_split),
-                  title: const Text('Add Coupler'),
-                  subtitle: const Text('2-port unequal split'),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _addCoupler(node);
-                  }),
-              ListTile(
-                  leading: const Icon(Icons.account_tree),
-                  title: const Text('Add Splitter'),
-                  subtitle: const Text('1xN equal split'),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _addSplitter(node);
-                  }),
-              ListTile(
-                  leading: const Icon(Icons.edit),
-                  title: const Text('Edit Node / Device'),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _editNode(node);
-                  }),
-              if (node.parentId != null)
-                ListTile(
-                    leading: const Icon(Icons.delete_sweep, color: Colors.red),
-                    title: const Text('Delete Entire Branch'),
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _deleteBranch(node);
-                    }),
-              ListTile(
-                  leading: const Icon(Icons.close),
-                  title: const Text('Close'),
-                  onTap: () => Navigator.pop(ctx)),
-            ])));
+      context: context,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Wrap(children: [
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text('Node Options - ${node.label}',
+                style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey.shade700)),
+          ),
+          const Divider(),
+          ListTile(
+            leading: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(8)),
+                child: const Icon(Icons.add, color: Colors.green)),
+            title: const Text('Add Child Node',
+                style: TextStyle(fontWeight: FontWeight.w500)),
+            subtitle: const Text('Add single child node'),
+            onTap: () {
+              Navigator.pop(ctx);
+              _addSingleChild(node);
+            },
+          ),
+          ListTile(
+            leading: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(8)),
+                child: const Icon(Icons.call_split, color: Colors.blue)),
+            title: const Text('Add Coupler',
+                style: TextStyle(fontWeight: FontWeight.w500)),
+            subtitle: const Text('2-port unequal split device'),
+            onTap: () {
+              Navigator.pop(ctx);
+              _addCoupler(node);
+            },
+          ),
+          ListTile(
+            leading: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                    color: Colors.purple.shade50,
+                    borderRadius: BorderRadius.circular(8)),
+                child: const Icon(Icons.account_tree, color: Colors.purple)),
+            title: const Text('Add Splitter',
+                style: TextStyle(fontWeight: FontWeight.w500)),
+            subtitle: const Text('1xN equal split device'),
+            onTap: () {
+              Navigator.pop(ctx);
+              _addSplitter(node);
+            },
+          ),
+          const Divider(),
+          ListTile(
+            leading: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                    color: Colors.orange.shade50,
+                    borderRadius: BorderRadius.circular(8)),
+                child: const Icon(Icons.edit, color: Colors.orange)),
+            title: const Text('Edit Node / Device',
+                style: TextStyle(fontWeight: FontWeight.w500)),
+            subtitle: const Text('Modify node properties'),
+            onTap: () {
+              Navigator.pop(ctx);
+              _editNode(node);
+            },
+          ),
+          if (node.parentId != null)
+            ListTile(
+              leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                      color: Colors.red.shade50,
+                      borderRadius: BorderRadius.circular(8)),
+                  child: const Icon(Icons.delete, color: Colors.red)),
+              title: const Text('Delete Node',
+                  style: TextStyle(fontWeight: FontWeight.w500)),
+              subtitle: const Text('Remove this node and children'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _deleteNode(node);
+              },
+            ),
+          const Divider(),
+          ListTile(
+              leading: const Icon(Icons.close, color: Colors.grey),
+              title: const Text('Close',
+                  style: TextStyle(fontWeight: FontWeight.w500)),
+              onTap: () => Navigator.pop(ctx)),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
   }
 
-  // ---------- Save as image ----------
   Future<void> _saveDiagram() async {
     try {
+      await Future.delayed(const Duration(milliseconds: 500));
+
       final boundary = repaintKey.currentContext?.findRenderObject()
           as RenderRepaintBoundary?;
       if (boundary == null) throw Exception('Boundary not found');
+
+      if (!boundary.attached) {
+        throw Exception('Render boundary not attached');
+      }
+
       final ui.Image img = await boundary.toImage(pixelRatio: 3.0);
       final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
       if (byteData == null) throw Exception('Failed to encode image');
       final bytes = byteData.buffer.asUint8List();
 
       String? localPath;
+      String fileName =
+          'ofc_diagram_${DateTime.now().millisecondsSinceEpoch}.png';
+
       if (kIsWeb) {
         final blob = html.Blob([bytes]);
         final url = html.Url.createObjectUrlFromBlob(blob);
         final anchor = html.AnchorElement(href: url)
-          ..setAttribute(
-              'download', 'ofc_${DateTime.now().millisecondsSinceEpoch}.png')
+          ..setAttribute('download', fileName)
           ..click();
         html.Url.revokeObjectUrl(url);
       } else {
@@ -1033,19 +1729,16 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
           dir = possible;
         else
           dir = await getApplicationDocumentsDirectory();
-        final file = File(
-            '${dir.path}/ofc_${DateTime.now().millisecondsSinceEpoch}.png');
+        final file = File('${dir.path}/$fileName');
         await file.writeAsBytes(bytes);
         localPath = file.path;
       }
 
-      // optional supabase upload
       String? publicUrl;
       try {
         final user = _supabase.auth.currentUser;
         if (user != null) {
-          final storagePath =
-              '${user.id}/${DateTime.now().millisecondsSinceEpoch}.png';
+          final storagePath = '${user.id}/$fileName';
           await _supabase.storage
               .from('diagrams')
               .uploadBinary(storagePath, bytes);
@@ -1056,32 +1749,60 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
         print('Supabase upload error: $e');
       }
 
-      final box = await Hive.openBox('diagram_downloads');
-      await box.add({
-        'local': localPath,
-        'cloud': publicUrl,
-        'date': DateTime.now().toIso8601String()
+      final downloadsBox = await Hive.openBox('diagram_downloads');
+      await downloadsBox.add({
+        'name': 'OFC Diagram ${DateTime.now().toString().split('.').first}',
+        'fileName': fileName,
+        'localPath': localPath,
+        'cloudUrl': publicUrl,
+        'date': DateTime.now().toIso8601String(),
+        'type': 'diagram',
+        'size': bytes.length,
       });
+
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content:
-              Text(publicUrl != null ? 'Saved & uploaded' : 'Saved locally')));
+        content: Text(publicUrl != null
+            ? 'Diagram saved locally & uploaded to cloud!'
+            : 'Diagram saved locally!'),
+        duration: const Duration(seconds: 3),
+        action: SnackBarAction(
+          label: 'View Downloads',
+          onPressed: () {
+            _showDownloadsInfo();
+          },
+        ),
+      ));
     } catch (e) {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('Save failed: $e')));
     }
   }
 
-  // ---------- Build UI ----------
+  void _showDownloadsInfo() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Diagram Saved'),
+        content: const Text(
+            'Your diagram has been saved to:\n\n• Local device storage\n• App downloads section\n• Cloud storage (if logged in)\n\nYou can access it from the Downloads section in the dashboard.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('OK'))
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF4F7FB),
+      backgroundColor: const Color(0xFFF8F9FA),
       appBar: AppBar(
         title: const Text('OFC Diagram Generator',
             style: TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
         elevation: 0,
-        backgroundColor: const Color(0xFF163A8A),
+        backgroundColor: const Color(0xFF1A237E),
         actions: [
           IconButton(
               onPressed: () {
@@ -1090,76 +1811,119 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                   _initRoot();
                 });
               },
-              icon: const Icon(Icons.refresh)),
-          IconButton(onPressed: _saveDiagram, icon: const Icon(Icons.download)),
+              icon: const Icon(Icons.refresh),
+              tooltip: 'Reset Diagram'),
+          IconButton(
+              onPressed: _saveDiagram,
+              icon: const Icon(Icons.download),
+              tooltip: 'Save Diagram'),
         ],
       ),
       body: Column(children: [
-        // Premium headend header (pills)
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
-                colors: [Color(0xFF163A8A), Color(0xFF2E6DF6)]),
-            boxShadow: [
-              BoxShadow(
-                  color: Colors.black.withOpacity(0.08),
-                  blurRadius: 12,
-                  offset: const Offset(0, 6))
+              gradient: const LinearGradient(
+                  colors: [Color(0xFF1A237E), Color(0xFF283593)]),
+              boxShadow: [
+                BoxShadow(
+                    color: Colors.black.withOpacity(0.08),
+                    blurRadius: 12,
+                    offset: const Offset(0, 6))
+              ]),
+          child: Column(
+            children: [
+              Row(children: [
+                Expanded(
+                  flex: 6,
+                  child: TextField(
+                    controller: _headendNameCtrl,
+                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                    decoration: InputDecoration(
+                      labelText: 'Headend Name',
+                      labelStyle: const TextStyle(color: Colors.white70),
+                      filled: true,
+                      fillColor: Colors.white.withOpacity(0.1),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide.none),
+                      prefixIcon:
+                          const Icon(Icons.router, color: Colors.white70),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: TextField(
+                    controller: _headendDbmCtrl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                    decoration: InputDecoration(
+                      labelText: 'Power (dBm)',
+                      labelStyle: const TextStyle(color: Colors.white70),
+                      filled: true,
+                      fillColor: Colors.white.withOpacity(0.1),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide.none),
+                      prefixIcon:
+                          const Icon(Icons.flash_on, color: Colors.white70),
+                    ),
+                    onChanged: _onHeadendPowerChanged, // Add this line
+                  ),
+                ),
+              ]),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Wavelength Configuration',
+                              style: TextStyle(
+                                  color: Colors.white70, fontSize: 12)),
+                          Row(
+                            children: [
+                              _buildWavelengthOption('1550', '1550 nm'),
+                              const SizedBox(width: 16),
+                              _buildWavelengthOption('1310', '1310 nm'),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Row(children: [Expanded(child: _buildWdmOption())]),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  ElevatedButton.icon(
+                    onPressed: _updateHeadend,
+                    icon: const Icon(Icons.update),
+                    label: const Text('Update Headend'),
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: const Color(0xFF1A237E),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 24, vertical: 16),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                        elevation: 2),
+                  ),
+                ],
+              ),
             ],
           ),
-          child: Row(children: [
-            Expanded(
-              flex: 6,
-              child: TextField(
-                controller: _headendNameCtrl,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: 'Headend Name',
-                  labelStyle: const TextStyle(color: Colors.white70),
-                  filled: true,
-                  fillColor: Colors.white.withOpacity(0.06),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide.none),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              flex: 2,
-              child: TextField(
-                controller: _headendDbmCtrl,
-                keyboardType: TextInputType.number,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: 'dBm',
-                  labelStyle: const TextStyle(color: Colors.white70),
-                  filled: true,
-                  fillColor: Colors.white.withOpacity(0.06),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide.none),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            ElevatedButton(
-              onPressed: _updateHeadend,
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: const Color(0xFF163A8A),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12))),
-              child: const Text('Update',
-                  style: TextStyle(fontWeight: FontWeight.bold)),
-            ),
-          ]),
         ),
-
-        // Canvas
         Expanded(
           child: Container(
             margin: const EdgeInsets.all(18),
@@ -1175,14 +1939,15 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(18),
               child: InteractiveViewer(
-                boundaryMargin: const EdgeInsets.all(200),
-                minScale: 0.3,
-                maxScale: 5.0,
+                boundaryMargin: const EdgeInsets.all(500),
+                minScale: 0.1,
+                maxScale: 8.0,
+                constrained: false,
                 child: RepaintBoundary(
                   key: repaintKey,
                   child: SizedBox(
-                    width: 2400,
-                    height: 1600,
+                    width: 6000,
+                    height: 4000,
                     child: root != null
                         ? DiagramWidget(
                             root: root!, onTapNode: _showNodeOptions)
@@ -1193,12 +1958,193 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
             ),
           ),
         ),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withOpacity(0.1),
+                  blurRadius: 8,
+                  offset: const Offset(0, -2))
+            ],
+          ),
+          child: SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _saveDiagram,
+              icon: const Icon(Icons.download_for_offline),
+              label: const Text('Generate & Download Diagram',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1A237E),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                elevation: 2,
+              ),
+            ),
+          ),
+        ),
       ]),
+    );
+  }
+
+  Widget _buildWavelengthOption(String value, String label) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: () {
+          setState(() {
+            _selectedWavelength = value;
+            root!.wavelength = value;
+            if (value == '1310' && _useWdm) {
+              _showWdmWarningDialog();
+            }
+            _recalculate(root!); // Add this line
+          });
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+          decoration: BoxDecoration(
+            color: _selectedWavelength == value
+                ? Colors.white.withOpacity(0.2)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+                color: _selectedWavelength == value
+                    ? Colors.white
+                    : Colors.white.withOpacity(0.3)),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                _selectedWavelength == value
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_off,
+                color: Colors.white,
+                size: 16,
+              ),
+              const SizedBox(width: 8),
+              Text(label,
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.w500)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showWdmWarningDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(children: [
+          Icon(Icons.warning, color: Colors.orange),
+          SizedBox(width: 8),
+          Text('WDM Compatibility Warning')
+        ]),
+        content: const Text(
+            'WDM (14-90) is only compatible with 1550nm wavelength and 15-50 configuration. WDM functionality will be disabled for 1310nm wavelength.'),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              setState(() {
+                _useWdm = false;
+                _wdmLoss = 0.0;
+                _wdmLossCtrl.text = "0.0";
+              });
+            },
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWdmOption() {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+      decoration: BoxDecoration(
+        color: _useWdm ? Colors.amber.withOpacity(0.2) : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+            color: _useWdm ? Colors.amber : Colors.white.withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          Checkbox(
+            value: _useWdm,
+            onChanged: (value) {
+              if (value == true && _selectedWavelength == '1310') {
+                _showWdmWarningDialog();
+                return;
+              }
+              setState(() {
+                _useWdm = value ?? false;
+                root!.useWdm = _useWdm;
+                if (!_useWdm) {
+                  _wdmLoss = 0.0;
+                  _wdmLossCtrl.text = "0.0";
+                  root!.wdmLoss = 0.0;
+                } else {
+                  root!.wdmLoss = _wdmLoss;
+                }
+                _recalculate(root!); // Add this line
+              });
+            },
+            checkColor: Colors.white,
+            fillColor: MaterialStateProperty.resolveWith<Color>((states) {
+              if (states.contains(MaterialState.selected)) return Colors.amber;
+              return Colors.transparent;
+            }),
+          ),
+          const SizedBox(width: 8),
+          const Text('WDM (14-90)',
+              style:
+                  TextStyle(color: Colors.white, fontWeight: FontWeight.w500)),
+          const SizedBox(width: 12),
+          if (_useWdm)
+            Expanded(
+              child: TextField(
+                controller: _wdmLossCtrl,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                onChanged: (value) {
+                  final loss = double.tryParse(value) ?? 0.0;
+                  setState(() {
+                    _wdmLoss = loss.clamp(0.0, 8.0);
+                  });
+                },
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+                decoration: InputDecoration(
+                  labelText: 'Loss (dB)',
+                  labelStyle: const TextStyle(color: Colors.white70),
+                  hintText: '0-8',
+                  hintStyle: const TextStyle(color: Colors.white54),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: Colors.amber)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: Colors.amber)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: Colors.amber)),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
 
-// ---------------- Diagram render widget ----------------
 class DiagramWidget extends StatelessWidget {
   final DiagramNode root;
   final void Function(DiagramNode) onTapNode;
@@ -1208,7 +2154,7 @@ class DiagramWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     return CustomPaint(
         painter: _DiagramPainter(root: root),
-        child: Stack(children: _overlay(root, 1200, 80)));
+        child: Stack(children: _overlay(root, 3000, 100)));
   }
 
   List<Widget> _overlay(DiagramNode node, double x, double y) {
@@ -1223,12 +2169,12 @@ class DiagramWidget extends StatelessWidget {
             child: Container(color: Colors.transparent))));
     if (node.children.isNotEmpty) {
       final count = node.children.length;
-      final spacing = 200.0;
+      final spacing = 250.0;
       final total = (count - 1) * spacing;
       final startX = x - total / 2;
       for (int i = 0; i < count; i++) {
         final childX = startX + i * spacing;
-        widgets.addAll(_overlay(node.children[i], childX, y + 180));
+        widgets.addAll(_overlay(node.children[i], childX, y + 200));
       }
     }
     return widgets;
@@ -1240,122 +2186,199 @@ class _DiagramPainter extends CustomPainter {
   _DiagramPainter({required this.root});
 
   @override
-  void paint(Canvas canvas, Size size) => _draw(canvas, root, 1200, 80);
+  void paint(Canvas canvas, Size size) => _draw(canvas, root, 3000, 100);
 
   void _draw(Canvas canvas, DiagramNode node, double x, double y) {
-    // children
     if (node.children.isNotEmpty) {
       final count = node.children.length;
-      final spacing = 200.0;
+      final spacing = 250.0;
       final total = (count - 1) * spacing;
       final startX = x - total / 2;
       final paintLine = Paint()
-        ..color = Colors.grey.shade500
+        ..color = const Color(0xFF78909C)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2.5;
 
       for (int i = 0; i < count; i++) {
+        final child = node.children[i];
         final childX = startX + i * spacing;
-        final childY = y + 180;
+        final childY = y + 200;
         final path = Path();
         path.moveTo(x, y + 40);
-        path.quadraticBezierTo(x, y + 110, childX, childY - 40);
+        path.quadraticBezierTo(x, y + 120, childX, childY - 40);
         canvas.drawPath(path, paintLine);
 
-        _draw(canvas, node.children[i], childX, childY);
+        // Show distance value on the connection line (not dB loss)
+        if (child.distance > 0) {
+          final midX = (x + childX) / 2;
+          final midY = (y + 40 + childY - 40) / 2;
 
-        // Display loss value and signal on the line
-        if (node.children[i].deviceLoss > 0) {
-          final lossTp = _text(
-              'Loss: ${node.children[i].deviceLoss.toStringAsFixed(2)} dB',
-              10,
-              Colors.red.shade700,
+          // Format distance display - show original unit if it was in meters
+          String distanceText;
+          if (child.distance < 0.001) {
+            // Less than 1 meter
+            distanceText = '${(child.distance * 1000).toStringAsFixed(0)} m';
+          } else if (child.distance < 1.0) {
+            // Less than 1 km but more than 1m
+            distanceText = '${(child.distance * 1000).toStringAsFixed(0)} m';
+          } else {
+            distanceText = '${child.distance.toStringAsFixed(2)} km';
+          }
+
+          final distanceTp = _text(distanceText, 10, Colors.blue.shade700,
               fontWeight: FontWeight.bold);
-          lossTp.paint(canvas, Offset(childX - lossTp.width / 2, childY - 75));
+          final backgroundRect = Rect.fromCenter(
+              center: Offset(midX, midY - 10),
+              width: distanceTp.width + 8,
+              height: distanceTp.height + 4);
+          canvas.drawRRect(
+              RRect.fromRectAndRadius(backgroundRect, const Radius.circular(4)),
+              Paint()..color = Colors.white.withOpacity(0.9));
+          canvas.drawRRect(
+              RRect.fromRectAndRadius(backgroundRect, const Radius.circular(4)),
+              Paint()
+                ..color = Colors.blue.shade300
+                ..style = PaintingStyle.stroke
+                ..strokeWidth = 1);
+          distanceTp.paint(
+              canvas,
+              Offset(midX - distanceTp.width / 2,
+                  midY - 10 - distanceTp.height / 2));
         }
-
-        final tp = _text('${node.children[i].signal.toStringAsFixed(2)} dBm',
-            11, Colors.grey.shade700);
-        tp.paint(canvas, Offset(childX - tp.width / 2, childY - 60));
+        _draw(canvas, child, childX, childY);
       }
     }
 
-    // node box
     final rect = RRect.fromRectAndRadius(
         Rect.fromCenter(center: Offset(x, y), width: 180, height: 90),
         const Radius.circular(14));
     Color fill;
-    if (node.isHeadend)
-      fill = const Color(0xFF10B981);
-    else if (node.isCoupler)
-      fill = const Color(0xFF3B82F6);
-    else if (node.isSplitter)
-      fill = const Color(0xFF8B5CF6);
-    else
-      fill = const Color(0xFF6B7280);
+    IconData icon;
+    Color iconColor;
 
-    // shadow
+    if (node.isHeadend) {
+      fill = const Color(0xFF1A237E);
+      icon = Icons.router;
+      iconColor = Colors.white;
+    } else if (node.isCoupler && node.isCouplerOutput) {
+      fill = const Color(0xFF0288D1);
+      icon = Icons.output;
+      iconColor = Colors.white;
+    } else if (node.isSplitter && node.isSplitterOutput) {
+      fill = const Color(0xFF7B1FA2);
+      icon = Icons.output;
+      iconColor = Colors.white;
+    } else if (node.isSplitter) {
+      fill = const Color(0xFF6A1B9A);
+      icon = Icons.account_tree;
+      iconColor = Colors.white;
+    } else if (node.deviceType == 'pass') {
+      fill = const Color(0xFF546E7A);
+      icon = Icons.arrow_forward;
+      iconColor = Colors.white;
+    } else {
+      fill = const Color(0xFF2E7D32);
+      icon = Icons.circle;
+      iconColor = Colors.white;
+    }
+
     canvas.drawRRect(
         rect.shift(const Offset(0, 4)),
         Paint()
-          ..color = Colors.black.withOpacity(0.12)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8));
-    canvas.drawRRect(rect, Paint()..color = fill);
+          ..color = Colors.black.withOpacity(0.15)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10));
+    final gradient = LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [fill, fill.withOpacity(0.8)]);
     canvas.drawRRect(
         rect,
         Paint()
-          ..color = Colors.white.withOpacity(0.18)
+          ..shader = gradient.createShader(Rect.fromCenter(
+              center: Offset(x, y),
+              width: 180,
+              height: 90))); // FIXED: Added comma
+    canvas.drawRRect(
+        rect,
+        Paint()
+          ..color = Colors.white.withOpacity(0.3)
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.6);
-
+          ..strokeWidth = 2);
+    _drawIcon(canvas, icon, Offset(x - 70, y), iconColor);
     final labelTp =
         _text(node.label, 14, Colors.white, fontWeight: FontWeight.bold);
     labelTp.paint(canvas, Offset(x - labelTp.width / 2, y - 22));
 
-    final sigTp = _text('${node.signal.toStringAsFixed(2)} dBm', 12,
-        Colors.white.withOpacity(0.95));
-    sigTp.paint(canvas, Offset(x - sigTp.width / 2, y + 4));
+    if (node.isHeadend) {
+      final nodeSignalText = '${node.signal.toStringAsFixed(2)} dBm';
+      final sigTp = _text(nodeSignalText, 12, Colors.white.withOpacity(0.95));
+      sigTp.paint(canvas, Offset(x - sigTp.width / 2, y + 4));
+    } else if (node.deviceLoss != 0.0) {
+      final lossValue = node.deviceLoss;
+      final lossText = '${lossValue.toStringAsFixed(2)} dB';
+      final lossTp = _text(lossText, 12, Colors.white.withOpacity(0.95));
+      lossTp.paint(canvas, Offset(x - lossTp.width / 2, y + 4));
+    }
 
+    String wavelengthText = '${node.wavelength}nm';
+    if (node.useWdm) {
+      wavelengthText += ' + WDM (${node.wdmLoss}dB)';
+    }
+    final wavelengthTp =
+        _text(wavelengthText, 10, Colors.white.withOpacity(0.8));
+    wavelengthTp.paint(canvas, Offset(x + 50, y - 35));
     if (node.isLeaf && !node.isHeadend) _drawHouse(canvas, Offset(x, y + 60));
   }
 
-  void _drawHouse(Canvas canvas, Offset c) {
-    final paint = Paint()..color = const Color(0xFF8B4513);
-    final size = 24.0;
+  void _drawIcon(
+      Canvas canvas, IconData iconData, Offset position, Color color) {
+    final textStyle = TextStyle(
+      color: color,
+      fontSize: 24,
+      fontFamily: iconData.fontFamily,
+      package: iconData.fontPackage,
+    );
 
-    // Roof
+    final textSpan = TextSpan(
+      text: String.fromCharCode(iconData.codePoint),
+      style: textStyle,
+    );
+
+    final textPainter = TextPainter(
+      text: textSpan,
+      textDirection: TextDirection.ltr,
+    );
+
+    textPainter.layout();
+    textPainter.paint(canvas, position);
+  }
+
+  void _drawHouse(Canvas canvas, Offset c) {
+    final size = 24.0;
     final roof = Path();
     roof.moveTo(c.dx, c.dy - size * 0.5);
     roof.lineTo(c.dx - size * 0.7, c.dy);
     roof.lineTo(c.dx + size * 0.7, c.dy);
     roof.close();
     canvas.drawPath(roof, Paint()..color = const Color(0xFFD32F2F));
-
-    // House body
     canvas.drawRRect(
         RRect.fromRectAndRadius(
             Rect.fromCenter(
-                center: Offset(c.dx, c.dy + size * 0.4),
+                center: Offset(c.dx, c.dy + size * 0.4), // FIXED: Added comma
                 width: size * 1.2,
                 height: size * 0.8),
             const Radius.circular(2)),
         Paint()..color = const Color(0xFFFFE082));
-
-    // Door
     canvas.drawRRect(
         RRect.fromRectAndRadius(
             Rect.fromCenter(
-                center: Offset(c.dx, c.dy + size * 0.6),
+                center: Offset(c.dx, c.dy + size * 0.6), // FIXED: Added comma
                 width: size * 0.35,
                 height: size * 0.5),
             const Radius.circular(2)),
-        Paint()..color = paint.color);
-
-    // Window
+        Paint()..color = const Color(0xFF8B4513));
     canvas.drawCircle(Offset(c.dx + size * 0.3, c.dy + size * 0.3), size * 0.15,
         Paint()..color = const Color(0xFF64B5F6));
-
-    // Chimney
     canvas.drawRect(
         Rect.fromLTWH(
             c.dx + size * 0.3, c.dy - size * 0.6, size * 0.2, size * 0.3),
