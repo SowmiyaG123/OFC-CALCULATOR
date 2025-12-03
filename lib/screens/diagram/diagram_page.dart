@@ -375,7 +375,22 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
 
         _recalculate(child);
       }
-    } else if (node.isSplitter && node.deviceConfig != null) {
+    } else if (node.isSplitter && node.isSplitterOutput) {
+      // This is a splitter OUTPUT node - just propagate to children with their own splitter logic
+      for (final child in node.children) {
+        child.wavelength = wavelength;
+        child.useWdm = node.useWdm;
+        child.wdmLoss = node.wdmLoss;
+
+        // If child is a splitter parent, it will handle its own calculations
+        // Otherwise, just maintain the signal from this splitter output
+
+        _recalculate(child);
+      }
+    } else if (node.deviceType == 'splitter' &&
+        node.deviceConfig != null &&
+        node.children.isNotEmpty) {
+      // This is a PARENT splitter node that has splitter output children
       final parts = node.deviceConfig!.split('::');
       final split = parts.isNotEmpty ? int.tryParse(parts[0]) ?? 2 : 2;
       final splitterVal =
@@ -390,19 +405,14 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
 
       // IMPORTANT: This value is NEGATIVE (e.g., -3.6)
       final splitterLossValue = (entry['value'] as num).toDouble();
-
-      // Get the ABSOLUTE value for device loss
       final splitterLossDisplay = splitterLossValue.abs();
 
-      // Calculate distance loss ONCE for all children using the FIRST child's distance
-      final firstChildDistance =
-          node.children.isNotEmpty ? node.children[0].distance : 0.0;
+      // Get distance from first child
+      final firstChildDistance = node.children[0].distance;
       final dLoss = firstChildDistance * fiberAttenuationDbPerKm;
 
-      // CORRECT: Calculate final device loss: splitterLossDisplay - distanceLoss
+      // Calculate final device loss and output signal
       final finalDeviceLoss = splitterLossDisplay - dLoss;
-
-      // CORRECT: Calculate output signal: input - splitterLossDisplay - distanceLoss
       final outputSignal = node.signal - splitterLossDisplay - dLoss;
 
       for (int i = 0; i < node.children.length; i++) {
@@ -410,32 +420,18 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
         child.wavelength = wavelength;
         child.useWdm = node.useWdm;
         child.wdmLoss = node.wdmLoss;
-
-        // Use the SAME device loss for all children
         child.deviceLoss = finalDeviceLoss;
-
-        // Use the SAME output signal for all children
         child.signal = outputSignal;
 
         _recalculate(child);
       }
     } else {
-      // For regular nodes and coupler outputs
+      // For regular nodes - just propagate wavelength and WDM settings
       for (final child in node.children) {
-        final dLoss = child.distance * fiberAttenuationDbPerKm;
-
-        // For coupler outputs, we need to preserve their calculated signal
-        // but apply distance loss
-        if (child.isCouplerOutput || child.isSplitterOutput) {
-          child.signal = child.signal - dLoss;
-        } else {
-          // For regular nodes, just apply distance loss
-          child.signal = node.signal - dLoss;
-        }
-
         child.wavelength = wavelength;
         child.useWdm = node.useWdm;
         child.wdmLoss = node.wdmLoss;
+
         _recalculate(child);
       }
     }
@@ -2438,3 +2434,4 @@ class _DiagramPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
+ //complete coupler and splitter woking for all levels
