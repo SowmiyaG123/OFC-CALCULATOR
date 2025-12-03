@@ -1,6 +1,3 @@
-// lib/screens/diagram/diagram_page.dart
-// Enhanced OFC Diagram Generator with immediate coupler splitting
-
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -73,8 +70,6 @@ class DiagramNode {
   bool get isHeadend => deviceType == 'headend';
   bool get isCouplerSplitBlock => isCouplerOutput;
 }
-
-// ---------------- CouplerCalculator ----------------
 
 // ---------------- CouplerCalculator ----------------
 class CouplerCalculator {
@@ -231,7 +226,7 @@ class CouplerCalculator {
   }
 }
 
-// ---------------- SplitterCalculator ----------------
+// ---------------- SplitterCalculator (CORRECTED) ----------------
 class SplitterCalculator {
   final double splitterValue;
   SplitterCalculator(this.splitterValue);
@@ -240,8 +235,10 @@ class SplitterCalculator {
 
   Map<String, List<Map<String, dynamic>>> calculateLoss() {
     Map<String, List<Map<String, dynamic>>> result = {};
-    final loss1550 = [-3.6, -6.8, -10.0, -13.0, -16.0, -19.5];
-    final loss1310 = [-3.0, -6.4, -9.9, -13.2, -16.4, -19.4];
+
+    // BASE LOSS VALUES from calculator (these are NEGATIVE in calculator)
+    final baseLoss1550 = [-3.6, -6.8, -10.0, -13.0, -16.0, -19.5];
+    final baseLoss1310 = [-3.0, -6.4, -9.9, -13.2, -16.4, -19.4];
 
     final adjust = splitterValue;
 
@@ -249,14 +246,16 @@ class SplitterCalculator {
         splits.length,
         (i) => {
               'split': splits[i],
-              'value': double.parse((loss1550[i] + adjust).toStringAsFixed(2))
+              'value':
+                  double.parse((baseLoss1550[i] + adjust).toStringAsFixed(2))
             });
 
     result["LOSS-13 10"] = List.generate(
         splits.length,
         (i) => {
               'split': splits[i],
-              'value': double.parse((loss1310[i] + adjust).toStringAsFixed(2))
+              'value':
+                  double.parse((baseLoss1310[i] + adjust).toStringAsFixed(2))
             });
 
     return result;
@@ -307,10 +306,6 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
   }
 
   // Helper method to calculate coupler losses using reference data
-  // Helper method to calculate coupler losses using reference data
-  // Helper method to calculate coupler losses using reference data
-  // Helper method to calculate coupler losses using reference data
-  // Helper method to calculate coupler losses using reference data
   List<double> _calculateCouplerLosses(
       int ratio, double inputPower, String wavelength) {
     final calculator = CouplerCalculator(inputPower);
@@ -332,48 +327,34 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     final val1 = (entry['val1'] as num).toDouble();
     final val2 = (entry['val2'] as num).toDouble();
 
-    // For 19 dBm input, the values are output powers, so calculate losses
-    if (inputPower == 19.0) {
-      final loss1 = val1 - inputPower; // This will be negative
-      final loss2 = val2 - inputPower; // This will be negative
-      return [
-        inputPower + loss1, // Output power for port 1
-        inputPower + loss2, // Output power for port 2
-        loss1.abs(), // Loss value for port 1
-        loss2.abs() // Loss value for port 2
-      ];
-    } else {
-      // For other input powers, val1 and val2 are already loss values
-      return [
-        inputPower + val1, // Output power for port 1
-        inputPower + val2, // Output power for port 2
-        val1.abs(), // Loss value for port 1
-        val2.abs() // Loss value for port 2
-      ];
-    }
+    // For ALL input powers, val1 and val2 are OUTPUT POWERS
+    // Calculate losses as the difference
+    final loss1 = inputPower - val1; // This will be positive (loss)
+    final loss2 = inputPower - val2; // This will be positive (loss)
+
+    return [
+      val1, // Output power for port 1 (direct from reference)
+      val2, // Output power for port 2 (direct from reference)
+      loss1, // Loss value for port 1 (positive value)
+      loss2 // Loss value for port 2 (positive value)
+    ];
   }
 
   void _recalculate(DiagramNode node) {
     if (node.children.isEmpty) return;
 
     final wavelength = node.wavelength;
-    final section = wavelength == '1310' ? 'LOSS-13 10' : 'LOSS-15 50';
     final wdmLoss = node.useWdm ? node.wdmLoss : 0.0;
 
     if (node.isCoupler && node.deviceConfig != null && !node.isCouplerOutput) {
       final parts = node.deviceConfig!.split('::');
       final ratio = parts.isNotEmpty ? int.tryParse(parts[0]) ?? 50 : 50;
-      final couplerVal =
-          parts.length > 1 ? double.tryParse(parts[1]) ?? 1.0 : 1.0;
 
-      // Recalculate coupler losses with current input power
+      // Recalculate coupler output powers with current input power
       final losses =
           _calculateCouplerLosses(ratio, node.signal, node.wavelength);
-      final p1 = losses[0];
-      final p2 = losses[1];
-
-      final adjustedP1 = p1 - wdmLoss;
-      final adjustedP2 = p2 - wdmLoss;
+      final output1Power = losses[0]; // Output power from reference
+      final output2Power = losses[1]; // Output power from reference
 
       for (int i = 0; i < node.children.length; i++) {
         final child = node.children[i];
@@ -383,11 +364,13 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
         child.wdmLoss = node.wdmLoss;
 
         if (i == 0) {
-          child.signal = node.signal + adjustedP1 - dLoss;
-          child.deviceLoss = losses[2]; // Update loss value dynamically
+          // Apply WDM loss and distance loss to reference output
+          child.signal = output1Power - wdmLoss - dLoss;
+          child.deviceLoss = losses[2]; // Update loss value
         } else if (i == 1) {
-          child.signal = node.signal + adjustedP2 - dLoss;
-          child.deviceLoss = losses[3]; // Update loss value dynamically
+          // Apply WDM loss and distance loss to reference output
+          child.signal = output2Power - wdmLoss - dLoss;
+          child.deviceLoss = losses[3]; // Update loss value
         }
 
         _recalculate(child);
@@ -396,40 +379,58 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       final parts = node.deviceConfig!.split('::');
       final split = parts.isNotEmpty ? int.tryParse(parts[0]) ?? 2 : 2;
       final splitterVal =
-          parts.length > 1 ? double.tryParse(parts[1]) ?? 1.0 : 1.0;
+          parts.length > 1 ? double.tryParse(parts[1]) ?? 0.0 : 0.0;
 
       final calc = SplitterCalculator(splitterVal);
       final all = calc.calculateLoss();
+      final section = wavelength == '1310' ? 'LOSS-13 10' : 'LOSS-15 50';
       final sec = all[section]!;
       final entry =
           sec.firstWhere((e) => e['split'] == split, orElse: () => sec.first);
-      final perLoss = (entry['value'] as num).toDouble();
 
-      final wdmLoss = node.useWdm ? node.wdmLoss : 0.0;
-      final adjustedLoss = perLoss - wdmLoss;
+      // IMPORTANT: This value is NEGATIVE (e.g., -3.6)
+      final splitterLossValue = (entry['value'] as num).toDouble();
 
-      // Update node signal with the splitter loss
-      node.signal = node.signal + adjustedLoss;
+      // Get the ABSOLUTE value for device loss
+      final splitterLossDisplay = splitterLossValue.abs();
+
+      // Calculate distance loss ONCE for all children using the FIRST child's distance
+      final firstChildDistance =
+          node.children.isNotEmpty ? node.children[0].distance : 0.0;
+      final dLoss = firstChildDistance * fiberAttenuationDbPerKm;
+
+      // CORRECT: Calculate final device loss: splitterLossDisplay - distanceLoss
+      final finalDeviceLoss = splitterLossDisplay - dLoss;
+
+      // CORRECT: Calculate output signal: input - splitterLossDisplay - distanceLoss
+      final outputSignal = node.signal - splitterLossDisplay - dLoss;
 
       for (int i = 0; i < node.children.length; i++) {
         final child = node.children[i];
-        final dLoss = child.distance * fiberAttenuationDbPerKm;
         child.wavelength = wavelength;
         child.useWdm = node.useWdm;
         child.wdmLoss = node.wdmLoss;
-        child.deviceLoss = adjustedLoss.abs(); // Update splitter loss value
-        child.signal =
-            node.signal - dLoss; // Update child signal with distance loss
-        _recalculate(child); // Recursively update all children
+
+        // Use the SAME device loss for all children
+        child.deviceLoss = finalDeviceLoss;
+
+        // Use the SAME output signal for all children
+        child.signal = outputSignal;
+
+        _recalculate(child);
       }
     } else {
+      // For regular nodes and coupler outputs
       for (final child in node.children) {
         final dLoss = child.distance * fiberAttenuationDbPerKm;
 
-        if (!child.isCouplerOutput) {
-          child.signal = node.signal - dLoss;
-        } else {
+        // For coupler outputs, we need to preserve their calculated signal
+        // but apply distance loss
+        if (child.isCouplerOutput || child.isSplitterOutput) {
           child.signal = child.signal - dLoss;
+        } else {
+          // For regular nodes, just apply distance loss
+          child.signal = node.signal - dLoss;
         }
 
         child.wavelength = wavelength;
@@ -445,6 +446,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     if (newPower != root!.signal) {
       setState(() {
         root!.signal = newPower;
+        // Force recalculation of entire tree
         _recalculate(root!);
       });
     }
@@ -753,6 +755,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                         ],
                       ),
                       const SizedBox(height: 8),
+                      // Calculation preview
                       Builder(
                         builder: (context) {
                           final losses = _calculateCouplerLosses(
@@ -760,7 +763,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                           return Column(
                             children: [
                               Text(
-                                'Expected Output: ${(parent.signal + losses[0]).toStringAsFixed(2)} dBm : ${(parent.signal + losses[1]).toStringAsFixed(2)} dBm',
+                                'Expected Output: ${losses[0].toStringAsFixed(2)} dBm : ${losses[1].toStringAsFixed(2)} dBm',
                                 style: const TextStyle(
                                   color: Colors.blue,
                                   fontSize: 12,
@@ -837,28 +840,21 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                         final fiberLoss = distance * fiberAttenuationDbPerKm;
                         final inputPower = parent.signal;
 
-                        // In _addCoupler method, replace this part:
                         final losses = _calculateCouplerLosses(
                             ratio, parent.signal, parent.wavelength);
-                        final output1Loss = losses[
-                            0]; // This is the actual loss value (negative)
-                        final output2Loss = losses[
-                            1]; // This is the actual loss value (negative)
+                        final output1Power = losses[0];
+                        final output2Power = losses[1];
 
                         final wdmLoss = parent.useWdm ? parent.wdmLoss : 0.0;
 
-// Calculate output signals by adding the loss to input power
                         final output1Signal = showDistanceInput
-                            ? (parent.signal +
-                                output1Loss -
-                                fiberLoss) // loss is negative, so it subtracts
-                            : (parent.signal + output1Loss);
+                            ? (output1Power - wdmLoss - fiberLoss)
+                            : (output1Power - wdmLoss);
 
                         final output2Signal = showDistanceInput
-                            ? (parent.signal +
-                                output2Loss -
-                                fiberLoss) // loss is negative, so it subtracts
-                            : (parent.signal + output2Loss);
+                            ? (output2Power - wdmLoss - fiberLoss)
+                            : (output2Power - wdmLoss);
+
                         final output1 = DiagramNode(
                           id: _nodeCounter++,
                           label: 'Coupler $ratio',
@@ -872,7 +868,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                           wdmLoss: parent.wdmLoss,
                           couplerRatio: ratio,
                           isCouplerOutput: true,
-                          deviceLoss: losses[2].abs(),
+                          deviceLoss: losses[2],
                           fiberLoss: fiberLoss,
                         );
 
@@ -889,7 +885,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                           wdmLoss: parent.wdmLoss,
                           couplerRatio: 100 - ratio,
                           isCouplerOutput: true,
-                          deviceLoss: losses[3].abs(),
+                          deviceLoss: losses[3],
                           fiberLoss: fiberLoss,
                         );
 
@@ -1067,8 +1063,8 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
 
                     final fiberLoss = distance * fiberAttenuationDbPerKm;
 
-                    // Use default splitter value of 1.0 since we removed the input field
-                    final splitterVal = 1.0;
+                    // Use splitter value of 0.0 (exact values from calculator)
+                    final splitterVal = 0.0;
 
                     final calc = SplitterCalculator(splitterVal);
                     final all = calc.calculateLoss();
@@ -1080,15 +1076,23 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                       (e) => e['split'] == split,
                       orElse: () => sec.first,
                     );
-                    final perLoss = (entry['value'] as num).toDouble();
+
+                    // IMPORTANT: This value is NEGATIVE (e.g., -3.6)
+                    final splitterLossValue =
+                        (entry['value'] as num).toDouble();
+
+                    // Get the ABSOLUTE value for display (positive)
+                    final splitterLossDisplay = splitterLossValue.abs();
 
                     final wdmLoss = parent.useWdm ? parent.wdmLoss : 0.0;
-                    final adjustedLoss = perLoss - wdmLoss;
 
-                    // Calculate output signal
-                    final outputSignal = showDistanceInput
-                        ? (parent.signal + adjustedLoss - fiberLoss)
-                        : (parent.signal + adjustedLoss);
+                    // CORRECT: Calculate device loss
+                    final finalDeviceLoss = splitterLossDisplay - fiberLoss;
+
+                    // CORRECT: Calculate output signal
+                    // Output = Input - splitterLossDisplay - fiberLoss
+                    final outputSignal =
+                        parent.signal - splitterLossDisplay - fiberLoss;
 
                     return Container(
                       padding: const EdgeInsets.all(12),
@@ -1120,12 +1124,29 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                           if (isBelowCoupler) ...[
                             const SizedBox(height: 8),
                             Text(
-                              'Splitter Loss: ${adjustedLoss.toStringAsFixed(2)} dB',
+                              'Splitter Loss: ${splitterLossDisplay.toStringAsFixed(2)} dB',
                               style: const TextStyle(
                                 color: Colors.purple,
                                 fontSize: 12,
                               ),
                             ),
+                            if (showDistanceInput) ...[
+                              Text(
+                                'Distance Loss: ${fiberLoss.toStringAsFixed(2)} dB',
+                                style: const TextStyle(
+                                  color: Colors.purple,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              Text(
+                                'Final Device Loss: ${finalDeviceLoss.toStringAsFixed(2)} dB',
+                                style: const TextStyle(
+                                  color: Colors.purple,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
                             Text(
                               'Output Power: ${outputSignal.toStringAsFixed(2)} dBm',
                               style: const TextStyle(
@@ -1168,8 +1189,8 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
 
                   final fiberLoss = distance * fiberAttenuationDbPerKm;
 
-                  // Use default splitter value of 1.0
-                  final splitterVal = 1.0;
+                  // Use splitter value of 0.0 (exact values from calculator)
+                  final splitterVal = 0.0;
 
                   final calc = SplitterCalculator(splitterVal);
                   final all = calc.calculateLoss();
@@ -1180,21 +1201,27 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                     (e) => e['split'] == split,
                     orElse: () => sec.first,
                   );
-                  final perLoss = (entry['value'] as num).toDouble();
 
-                  final wdmLoss = parent.useWdm ? parent.wdmLoss : 0.0;
-                  final adjustedLoss = perLoss - wdmLoss;
+                  // IMPORTANT: This value is NEGATIVE (e.g., -3.6)
+                  final splitterLossValue = (entry['value'] as num).toDouble();
 
-                  final outputSignal = showDistanceInput
-                      ? (parent.signal + adjustedLoss - fiberLoss)
-                      : (parent.signal + adjustedLoss);
+                  // Get the ABSOLUTE value for device loss
+                  final splitterLossDisplay = splitterLossValue.abs();
 
+                  // CORRECT: Calculate device loss as: splitter loss - distance loss
+                  final finalDeviceLoss = splitterLossDisplay - fiberLoss;
+
+                  // CORRECT: Calculate output signal
+                  final outputSignal =
+                      parent.signal - splitterLossDisplay - fiberLoss;
+
+                  // Create ALL splitter outputs with the SAME values
                   for (int i = 0; i < split; i++) {
                     final outputNode = DiagramNode(
                       id: _nodeCounter++,
                       label: 'Splitter${i + 1}',
-                      signal: outputSignal,
-                      distance: distance,
+                      signal: outputSignal, // Same output signal for all
+                      distance: distance, // Same distance for all
                       parentId: parent.id,
                       deviceType: 'splitter',
                       deviceConfig: '$split::$splitterVal',
@@ -1202,7 +1229,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                       useWdm: parent.useWdm,
                       wdmLoss: parent.wdmLoss,
                       isSplitterOutput: true,
-                      deviceLoss: adjustedLoss.abs(),
+                      deviceLoss: finalDeviceLoss, // Same device loss for all
                       fiberLoss: fiberLoss,
                     );
                     parent.children.add(outputNode);
@@ -1333,7 +1360,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       );
     } else if (node.isSplitter) {
       int split = 2;
-      double splitterVal = 1.0;
+      double splitterVal = 0.0;
 
       if (node.deviceConfig != null) {
         final p = node.deviceConfig!.split('::');
@@ -2001,7 +2028,8 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
             if (value == '1310' && _useWdm) {
               _showWdmWarningDialog();
             }
-            _recalculate(root!); // Add this line
+            // Force recalculation when wavelength changes
+            _recalculate(root!);
           });
         },
         child: Container(
@@ -2304,22 +2332,31 @@ class _DiagramPainter extends CustomPainter {
           ..color = Colors.white.withOpacity(0.3)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 2);
+
     _drawIcon(canvas, icon, Offset(x - 70, y), iconColor);
     final labelTp =
         _text(node.label, 14, Colors.white, fontWeight: FontWeight.bold);
     labelTp.paint(canvas, Offset(x - labelTp.width / 2, y - 22));
 
-    if (node.isHeadend) {
+    // FOR ALL BLOCKS: Show DEVICE LOSS first, then SIGNAL
+    // Show ONLY dBm for coupler/splitter outputs, show both for regular nodes
+    // Show ONLY dBm for coupler/splitter outputs, show both for regular nodes
+    if (node.isCouplerOutput || node.isSplitterOutput) {
+      // For coupler/splitter outputs: Show ONLY dBm value (centered, larger font)
       final nodeSignalText = '${node.signal.toStringAsFixed(2)} dBm';
-      final sigTp = _text(nodeSignalText, 12, Colors.white.withOpacity(0.95));
-      sigTp.paint(canvas, Offset(x - sigTp.width / 2, y + 4));
-    } else if (node.deviceLoss != 0.0) {
-      final lossValue = node.deviceLoss;
-      final lossText = '${lossValue.toStringAsFixed(2)} dB';
-      final lossTp = _text(lossText, 12, Colors.white.withOpacity(0.95));
-      lossTp.paint(canvas, Offset(x - lossTp.width / 2, y + 4));
+      final sigTp = _text(nodeSignalText, 14, Colors.white.withOpacity(0.95));
+      sigTp.paint(canvas, Offset(x - sigTp.width / 2, y + 5));
+    } else {
+      // For regular nodes: Show both device loss and dBm (if applicable)
+      if (node.deviceLoss != 0.0) {
+        final lossText = '${node.deviceLoss.toStringAsFixed(2)} dB';
+        final lossTp = _text(lossText, 12, Colors.white.withOpacity(0.95));
+        lossTp.paint(canvas, Offset(x - lossTp.width / 2, y + 4));
+      }
+      final nodeSignalText = '${node.signal.toStringAsFixed(2)} dBm';
+      final sigTp = _text(nodeSignalText, 10, Colors.white.withOpacity(0.8));
+      sigTp.paint(canvas, Offset(x - sigTp.width / 2, y + 20));
     }
-
     String wavelengthText = '${node.wavelength}nm';
     if (node.useWdm) {
       wavelengthText += ' + WDM (${node.wdmLoss}dB)';
