@@ -4,7 +4,6 @@ import '../../utils/constants.dart';
 import '../auth/login_page.dart';
 import '../main_app/cal_onepage.dart';
 import '../diagram/diagram_page.dart';
-import '../diagram/diagram_history_page.dart';
 import '../downloads/download_page.dart';
 
 class MainDashboard extends StatefulWidget {
@@ -152,7 +151,7 @@ class _MainDashboardState extends State<MainDashboard> {
                     Icons.calculate_rounded,
                     const Color(0xFF7B2CBF),
                     const Color(0xFF9D4EDD),
-                    'Combined Coupler + Splitter\nloss values with diagram',
+                    'Combined Coupler + Splitter',
                     () {
                       Navigator.push(
                         context,
@@ -292,20 +291,6 @@ class _MainDashboardState extends State<MainDashboard> {
                 );
               },
             ),
-
-            _buildMenuTile(
-              context,
-              Icons.history_rounded,
-              'Diagram History',
-              () {
-                Navigator.pop(context);
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const DiagramHistoryPage()),
-                );
-              },
-            ),
-
             _buildMenuTile(
               context,
               Icons.cloud_download_rounded,
