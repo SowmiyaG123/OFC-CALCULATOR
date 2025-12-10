@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 import '../../services/auth_service.dart';
 import '../../utils/constants.dart';
 import '../auth/login_page.dart';
-import '../main_app/cal_onepage.dart';
+// import '../main_app/cal_onepage.dart'; // REMOVE THIS LINE
 import '../diagram/diagram_page.dart';
 import '../downloads/download_page.dart';
+import '../main_app/wdm_calculator_page.dart'; // This has CouplerSplitterOnePage
 
 class MainDashboard extends StatefulWidget {
   const MainDashboard({super.key});
@@ -151,7 +152,7 @@ class _MainDashboardState extends State<MainDashboard> {
                     Icons.calculate_rounded,
                     const Color(0xFF7B2CBF),
                     const Color(0xFF9D4EDD),
-                    'Combined Coupler + Splitter',
+                    'Combined Coupler + Splitter+ WDM',
                     () {
                       Navigator.push(
                         context,
@@ -181,6 +182,7 @@ class _MainDashboardState extends State<MainDashboard> {
                     },
                     isFullWidth: true,
                   ),
+                  const SizedBox(height: 8),
                 ],
               ),
             ),
@@ -264,7 +266,7 @@ class _MainDashboardState extends State<MainDashboard> {
               () => Navigator.pop(context),
             ),
 
-            // Only 1 Calculator Menu (name changed to CouplerSplitterOnePage)
+            // FTTH Calculator Menu
             _buildMenuTile(
               context,
               Icons.calculate_rounded,
@@ -278,6 +280,8 @@ class _MainDashboardState extends State<MainDashboard> {
                 );
               },
             ),
+
+            // WDM Calculator Menu
 
             _buildMenuTile(
               context,
