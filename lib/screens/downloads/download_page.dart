@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:share_plus/share_plus.dart'; // Add this to pubspec.yaml
+import '../diagram/diagram_page.dart';
 
 class DownloadsPage extends StatefulWidget {
   const DownloadsPage({Key? key}) : super(key: key);
@@ -22,6 +23,16 @@ class _DownloadsPageState extends State<DownloadsPage> {
 
   void _initBox() {
     _boxFuture = _ensureBoxOpen();
+  }
+
+  void _reEditDiagram(Map data) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => OFCDiagramPage(
+            savedData: data), // Change _OFCDiagramPage to OFCDiagramPage
+      ),
+    );
   }
 
   Future<Box> _ensureBoxOpen() async {
@@ -438,6 +449,17 @@ class _DownloadsPageState extends State<DownloadsPage> {
                                       ),
                                       itemBuilder: (context) => [
                                         const PopupMenuItem(
+                                          value: 're-edit',
+                                          child: Row(
+                                            children: [
+                                              Icon(Icons.edit,
+                                                  size: 18, color: Colors.blue),
+                                              SizedBox(width: 10),
+                                              Text('Re-edit'),
+                                            ],
+                                          ),
+                                        ),
+                                        const PopupMenuItem(
                                           value: 'share',
                                           child: Row(
                                             children: [
@@ -463,12 +485,13 @@ class _DownloadsPageState extends State<DownloadsPage> {
                                       ],
                                       onSelected: (value) async {
                                         if (value == 'delete') {
-                                          // Find the actual index in the box
                                           final actualIndex =
                                               box.length - 1 - index;
                                           await _deleteItem(box, actualIndex);
                                         } else if (value == 'share') {
                                           _shareImage(localPath, cloudUrl);
+                                        } else if (value == 're-edit') {
+                                          _reEditDiagram(data);
                                         }
                                       },
                                     ),
