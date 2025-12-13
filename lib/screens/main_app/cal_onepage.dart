@@ -1,6 +1,113 @@
 import 'package:flutter/material.dart';
 
-// -------------------- CouplerCalculator (inlined) --------------------
+// -------------------- WDM Calculator --------------------
+class WDMCalculator {
+  final double wdmValue; // This is the same as the WDM Loss (dB) input
+
+  WDMCalculator({
+    required this.wdmValue,
+  });
+
+  // WDM Coupler data - SAME as LOSS-13 10
+  List<Map<String, double>> calculateWDMCoupler() {
+    // Reference data - EXACTLY same structure as LOSS-13 10
+    final Map<double, List<Map<String, double>>> wdmCouplerData = {
+      1.0: [
+        {"ratio": 5, "val1": -10.5, "val2": 0.8},
+        {"ratio": 10, "val1": -8.9, "val2": 0.6},
+        {"ratio": 15, "val1": -7.5, "val2": 0.3},
+        {"ratio": 20, "val1": -5.9, "val2": 0.1},
+        {"ratio": 25, "val1": -5.1, "val2": -0.2},
+        {"ratio": 30, "val1": -4.2, "val2": -0.5},
+        {"ratio": 35, "val1": -3.6, "val2": -0.8},
+        {"ratio": 40, "val1": -2.9, "val2": -1.2},
+        {"ratio": 45, "val1": -2.5, "val2": -1.6},
+        {"ratio": 50, "val1": -2.0, "val2": -2.0},
+      ],
+      2.0: [
+        {"ratio": 5, "val1": -9.5, "val2": 1.8},
+        {"ratio": 10, "val1": -7.9, "val2": 1.6},
+        {"ratio": 15, "val1": -6.5, "val2": 1.3},
+        {"ratio": 20, "val1": -4.9, "val2": 1.1},
+        {"ratio": 25, "val1": -4.1, "val2": 0.8},
+        {"ratio": 30, "val1": -3.2, "val2": 0.5},
+        {"ratio": 35, "val1": -2.6, "val2": 0.2},
+        {"ratio": 40, "val1": -1.9, "val2": -0.2},
+        {"ratio": 45, "val1": -1.5, "val2": -0.6},
+        {"ratio": 50, "val1": -1.0, "val2": -1.0},
+      ],
+      10.0: [
+        {"ratio": 5, "val1": -1.5, "val2": 9.8},
+        {"ratio": 10, "val1": 0.1, "val2": 9.6},
+        {"ratio": 15, "val1": 1.5, "val2": 9.3},
+        {"ratio": 20, "val1": 3.1, "val2": 9.1},
+        {"ratio": 25, "val1": 3.9, "val2": 8.8},
+        {"ratio": 30, "val1": 4.8, "val2": 8.5},
+        {"ratio": 35, "val1": 5.4, "val2": 8.2},
+        {"ratio": 40, "val1": 6.1, "val2": 7.8},
+        {"ratio": 45, "val1": 6.5, "val2": 7.4},
+        {"ratio": 50, "val1": 7.0, "val2": 7.0},
+      ],
+    };
+
+    // Get interpolation keys
+    final keys = wdmCouplerData.keys.toList()..sort();
+    double lower = keys.first;
+    double upper = keys.last;
+
+    for (int i = 0; i < keys.length - 1; i++) {
+      if (wdmValue >= keys[i] && wdmValue <= keys[i + 1]) {
+        lower = keys[i];
+        upper = keys[i + 1];
+        break;
+      }
+    }
+
+    // Linear interpolation - SAME LOGIC as LOSS-13 10
+    double ratio = (wdmValue - lower) / (upper - lower);
+    final lowerData = wdmCouplerData[lower]!;
+    final upperData = wdmCouplerData[upper]!;
+
+    List<Map<String, double>> results = [];
+    for (int i = 0; i < lowerData.length; i++) {
+      double val1 = lowerData[i]["val1"]! +
+          (upperData[i]["val1"]! - lowerData[i]["val1"]!) * ratio;
+      double val2 = lowerData[i]["val2"]! +
+          (upperData[i]["val2"]! - lowerData[i]["val2"]!) * ratio;
+      results.add({
+        "ratio": lowerData[i]["ratio"]!,
+        "val1": double.parse(val1.toStringAsFixed(1)),
+        "val2": double.parse(val2.toStringAsFixed(1)),
+      });
+    }
+
+    return results;
+  }
+
+  // WDM Splitter data - SAME as LOSS-13 10 splitter
+  List<Map<String, dynamic>> calculateWDMSplitter() {
+    final List<int> splits = [2, 4, 8, 16, 32, 64];
+    
+    // Base values for splitter - SAME as LOSS-13 10 splitter base values
+    final baseValues = [-3.0, -6.4, -9.9, -13.2, -16.4, -19.4];
+    
+    // Adjust based on input value (same logic as splitter calculator)
+    final adjust = wdmValue - 1.0;
+    
+    List<Map<String, dynamic>> results = [];
+    for (int i = 0; i < splits.length; i++) {
+      final value = baseValues[i] + adjust;
+      results.add({
+        'split': splits[i],
+        'value': double.parse(value.toStringAsFixed(1))
+      });
+    }
+    
+    return results;
+  }
+}
+
+// -------------------- CouplerCalculator --------------------
 class CouplerCalculator {
   final double couplerValue;
   CouplerCalculator(this.couplerValue);
@@ -118,8 +225,8 @@ class CouplerCalculator {
                 ratio;
         interpolated.add({
           "ratio": lowerData[section]![i]["ratio"]!,
-          "val1": double.parse(val1.toStringAsFixed(2)),
-          "val2": double.parse(val2.toStringAsFixed(2)),
+          "val1": double.parse(val1.toStringAsFixed(1)),
+          "val2": double.parse(val2.toStringAsFixed(1)),
         });
       }
       result.add({"section": section, "data": interpolated});
@@ -129,7 +236,7 @@ class CouplerCalculator {
   }
 }
 
-// -------------------- SplitterCalculator (with both loss tables) --------------------
+// -------------------- SplitterCalculator --------------------
 class SplitterCalculator {
   final double splitterValue;
   SplitterCalculator(this.splitterValue);
@@ -148,33 +255,19 @@ class SplitterCalculator {
         splits.length,
         (i) => {
               'split': splits[i],
-              'value': double.parse((loss1550[i] + adjust).toStringAsFixed(2))
+              'value': double.parse((loss1550[i] + adjust).toStringAsFixed(1))
             });
 
     result["LOSS-13 10"] = List.generate(
         splits.length,
         (i) => {
               'split': splits[i],
-              'value': double.parse((loss1310[i] + adjust).toStringAsFixed(2))
+              'value': double.parse((loss1310[i] + adjust).toStringAsFixed(1))
             });
 
     return result;
   }
 }
-
-// -------- Color pairs--------
-const List<List<Color>> colorPairs = [
-  [Color(0xFF1E88E5), Color(0xFFD32F2F)],
-  [Color(0xFF388E3C), Color(0xFFF57C00)],
-  [Color(0xFF7B1FA2), Color(0xFF00796B)],
-  [Color(0xFFC62828), Color(0xFF0097A7)],
-  [Color(0xFF6A1B9A), Color(0xFF1565C0)],
-  [Color(0xFF5E35B1), Color(0xFFFFA726)],
-  [Color(0xFF00796B), Color(0xFFD32F2F)],
-  [Color(0xFF1565C0), Color(0xFFF57C00)],
-  [Color(0xFF388E3C), Color(0xFFC62828)],
-  [Color(0xFF7B1FA2), Color(0xFF1E88E5)],
-];
 
 class CouplerSplitterOnePage extends StatefulWidget {
   const CouplerSplitterOnePage({Key? key}) : super(key: key);
@@ -184,28 +277,33 @@ class CouplerSplitterOnePage extends StatefulWidget {
 }
 
 class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
-  final TextEditingController _inputCtrl = TextEditingController(text: "1.0");
-  final TextEditingController _splitterValCtrl =
-      TextEditingController(text: "1.0");
+  final TextEditingController _couplerCtrl = TextEditingController(text: "1.0");
+  final TextEditingController _wdmCtrl = TextEditingController(text: "3.0");
+  
   List<Map<String, dynamic>> _couplerResults = [];
   Map<String, List<Map<String, dynamic>>> _splitterResults = {};
+  List<Map<String, double>> _wdmCouplerResults = [];
+  List<Map<String, dynamic>> _wdmSplitterResults = [];
 
   void _onCalculate() {
-    final v = double.tryParse(_inputCtrl.text.trim());
-    final splitterBase = double.tryParse(_splitterValCtrl.text.trim()) ?? 1.0;
+    final couplerValue = double.tryParse(_couplerCtrl.text.trim());
+    final wdmValue = double.tryParse(_wdmCtrl.text.trim()) ?? 3.0;
 
-    if (v == null) {
+    if (couplerValue == null) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Enter a numeric coupler value')));
       return;
     }
 
-    final couplerCalc = CouplerCalculator(v);
-    final splitterCalc = SplitterCalculator(splitterBase);
+    final couplerCalc = CouplerCalculator(couplerValue);
+    final splitterCalc = SplitterCalculator(couplerValue); // Use same value for splitter
+    final wdmCalc = WDMCalculator(wdmValue: wdmValue);
 
     setState(() {
       _couplerResults = couplerCalc.calculateLoss();
       _splitterResults = splitterCalc.calculateLoss();
+      _wdmCouplerResults = wdmCalc.calculateWDMCoupler();
+      _wdmSplitterResults = wdmCalc.calculateWDMSplitter();
     });
   }
 
@@ -232,10 +330,7 @@ class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
         children: [
           _buildSectionTitle(sectionName),
           const SizedBox(height: 12),
-          ...data.asMap().entries.map((entry) {
-            final idx = entry.key;
-            final r = entry.value;
-            final pair = colorPairs[idx % colorPairs.length];
+          ...data.map((r) {
             final leftRatio = r['ratio'].toInt();
             final rightRatio = 100 - leftRatio;
             final val1 = (r['val1'] as double).toStringAsFixed(1);
@@ -243,53 +338,13 @@ class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
 
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
-              child: RichText(
-                text: TextSpan(
-                  style: const TextStyle(
-                      fontSize: 15, fontFamily: 'monospace', height: 1.5),
-                  children: [
-                    TextSpan(
-                      text: '${leftRatio.toString().padLeft(2, '0')}',
-                      style: TextStyle(
-                        color: pair[0],
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const TextSpan(
-                      text: ':',
-                      style: TextStyle(
-                          color: Colors.black, fontWeight: FontWeight.bold),
-                    ),
-                    TextSpan(
-                      text: '${rightRatio.toString().padLeft(2, '0')}',
-                      style: TextStyle(
-                        color: pair[1],
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const TextSpan(
-                      text: ' = ',
-                      style: TextStyle(color: Colors.black),
-                    ),
-                    TextSpan(
-                      text: val1,
-                      style: TextStyle(
-                        color: pair[0],
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const TextSpan(
-                      text: ' : ',
-                      style: TextStyle(color: Colors.black),
-                    ),
-                    TextSpan(
-                      text: val2,
-                      style: TextStyle(
-                        color: pair[1],
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
+              child: Text(
+                '${leftRatio.toString().padLeft(2, '0')}:${rightRatio.toString().padLeft(2, '0')} = $val1 : $val2',
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontFamily: 'monospace',
+                  height: 1.5,
+                  color: Colors.black,
                 ),
               ),
             );
@@ -308,43 +363,94 @@ class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
         children: [
           _buildSectionTitle(sectionName),
           const SizedBox(height: 12),
-          ...rows.asMap().entries.map((entry) {
-            final idx = entry.key;
-            final r = entry.value;
-            final color = colorPairs[idx % colorPairs.length][0];
+          ...rows.map((r) {
             final split = r['split'];
             final value = (r['value'] as double).toStringAsFixed(1);
 
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
-              child: RichText(
-                text: TextSpan(
-                  style: const TextStyle(
-                      fontSize: 15, fontFamily: 'monospace', height: 1.5),
-                  children: [
-                    TextSpan(
-                      text: '1x$split',
-                      style: TextStyle(
-                        color: color,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const TextSpan(
-                      text: ' = ',
-                      style: TextStyle(color: Colors.black),
-                    ),
-                    TextSpan(
-                      text: value,
-                      style: TextStyle(
-                        color: color,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
+              child: Text(
+                '1x$split = $value',
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontFamily: 'monospace',
+                  height: 1.5,
+                  color: Colors.black,
                 ),
               ),
             );
           }),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWDMSection() {
+    if (_wdmCouplerResults.isEmpty && _wdmSplitterResults.isEmpty) {
+      return Container();
+    }
+    
+    return Container(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // WDM Coupler section
+          _buildSectionTitle('WDM (14-90)'),
+          const SizedBox(height: 12),
+          ..._wdmCouplerResults.map((r) {
+            final leftRatio = r['ratio']!.toInt();
+            final rightRatio = 100 - leftRatio;
+            final val1 = r['val1']!.toStringAsFixed(1);
+            final val2 = r['val2']!.toStringAsFixed(1);
+
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Text(
+                '${leftRatio.toString().padLeft(2, '0')}:${rightRatio.toString().padLeft(2, '0')} = $val1 : $val2',
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontFamily: 'monospace',
+                  height: 1.5,
+                  color: Colors.black,
+                ),
+              ),
+            );
+          }),
+          
+          const SizedBox(height: 16),
+          
+          // WDM Splitter section
+          ..._wdmSplitterResults.map((r) {
+            final split = r['split'];
+            final value = (r['value'] as double).toStringAsFixed(1);
+
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Text(
+                '1x$split = $value',
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontFamily: 'monospace',
+                  height: 1.5,
+                  color: Colors.black,
+                ),
+              ),
+            );
+          }),
+          
+          const SizedBox(height: 12),
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: Text(
+              'Note: WDM outputs calculated using coupler reference table (1550nm only)',
+              style: TextStyle(
+                fontSize: 12,
+                fontStyle: FontStyle.italic,
+                color: Colors.grey,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -359,7 +465,7 @@ class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
       ),
       body: Column(
         children: [
-          // Input section - always visible and editable
+          // Input section
           Card(
             margin: const EdgeInsets.all(16),
             elevation: 3,
@@ -374,11 +480,11 @@ class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
                     children: [
                       Expanded(
                         child: TextField(
-                          controller: _inputCtrl,
+                          controller: _couplerCtrl,
                           keyboardType: const TextInputType.numberWithOptions(
                               decimal: true),
                           decoration: InputDecoration(
-                            labelText: 'Coupler Value',
+                            labelText: 'Coupler/Splitter Value',
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(8),
                             ),
@@ -390,11 +496,11 @@ class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
                       const SizedBox(width: 12),
                       Expanded(
                         child: TextField(
-                          controller: _splitterValCtrl,
+                          controller: _wdmCtrl,
                           keyboardType: const TextInputType.numberWithOptions(
                               decimal: true),
                           decoration: InputDecoration(
-                            labelText: 'Splitter Value',
+                            labelText: 'WDM Loss (dB)',
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(8),
                             ),
@@ -430,13 +536,16 @@ class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
               ),
             ),
           ),
+          
           // Results section
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.symmetric(horizontal: 12),
               child: Column(
                 children: [
-                  if (_couplerResults.isNotEmpty || _splitterResults.isNotEmpty)
+                  if (_couplerResults.isNotEmpty || 
+                      _splitterResults.isNotEmpty || 
+                      _wdmCouplerResults.isNotEmpty)
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -454,17 +563,18 @@ class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
                                       _couplerResults.firstWhere(
                                           (s) => s['section'] == 'LOSS-15 50')),
                                 if (_splitterResults['LOSS-15 50'] != null)
-                                  _buildSplitterSection('LOSS-15 50',
+                                  _buildSplitterSection('',
                                       _splitterResults['LOSS-15 50']!),
                               ],
                             ),
                           ),
                         ),
-                        // Right column - LOSS-13 10
+                        
+                        // Middle column - LOSS-13 10
                         Expanded(
                           child: Card(
                             elevation: 2,
-                            margin: const EdgeInsets.only(left: 6, bottom: 16),
+                            margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 16),
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12)),
                             child: Column(
@@ -474,10 +584,21 @@ class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
                                       _couplerResults.firstWhere(
                                           (s) => s['section'] == 'LOSS-13 10')),
                                 if (_splitterResults['LOSS-13 10'] != null)
-                                  _buildSplitterSection('LOSS-13 10',
+                                  _buildSplitterSection('',
                                       _splitterResults['LOSS-13 10']!),
                               ],
                             ),
+                          ),
+                        ),
+                        
+                        // Right column - WDM Calculator
+                        Expanded(
+                          child: Card(
+                            elevation: 2,
+                            margin: const EdgeInsets.only(left: 6, bottom: 16),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                            child: _buildWDMSection(),
                           ),
                         ),
                       ],
