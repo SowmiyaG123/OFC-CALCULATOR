@@ -625,21 +625,18 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
         final losses =
             _calculateCouplerLosses(ratio, node.signal, node.wavelength);
         final fiberLoss = child.fiberLoss;
-
-        // CRITICAL FIX: Determine which output based on couplerRatio value
-        // First output has the SMALLER ratio value (e.g., 30 in 30:70)
-        // Second output has the LARGER ratio value (e.g., 70 in 30:70)
+        // REMOVE THIS LINE: final wdmLoss = node.useWdm ? node.wdmLoss : 0.0;
 
         // Check if this child is the first output by comparing with parent's children
         final isFirstOutput = node.children.indexOf(child) == 0;
 
         if (isFirstOutput) {
           // First output gets losses[0] and losses[2]
-          child.signal = losses[0] - fiberLoss;
+          child.signal = losses[0] - fiberLoss; // REMOVED wdmLoss
           child.deviceLoss = losses[2];
         } else {
           // Second output gets losses[1] and losses[3]
-          child.signal = losses[1] - fiberLoss;
+          child.signal = losses[1] - fiberLoss; // REMOVED wdmLoss
           child.deviceLoss = losses[3];
         }
 
@@ -656,9 +653,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
         } else {
           child.wdmOutputPower = 0.0;
         }
-      }
-      // If it's a splitter output, recalculate with parent power
-      else if (child.isSplitterOutput) {
+      } else if (child.isSplitterOutput) {
         // Splitter outputs share the same signal, just propagate
         final parts = child.deviceConfig?.split('::');
         if (parts != null && parts.length >= 2) {
