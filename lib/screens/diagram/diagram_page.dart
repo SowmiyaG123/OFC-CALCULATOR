@@ -184,6 +184,29 @@ class CouplerCalculator {
       ],
     },
   };
+  // Add this method to CouplerCalculator class in diagram_page.dart
+  List<double> calculateOutputsForRatio(int ratio, String wavelength) {
+    final calculatedData = calculateLoss();
+    final section = wavelength == '1310' ? 'LOSS-13 10' : 'LOSS-15 50';
+
+    for (var sectionData in calculatedData) {
+      if (sectionData['section'] == section) {
+        final dataList =
+            (sectionData['data'] as List).cast<Map<String, dynamic>>();
+        final entry = dataList.firstWhere(
+          (e) => e['ratio'] == ratio,
+          orElse: () => dataList.first,
+        );
+
+        final val1 = (entry['val1'] as num).toDouble();
+        final val2 = (entry['val2'] as num).toDouble();
+
+        return [val1, val2];
+      }
+    }
+
+    return [0.0, 0.0];
+  }
 
   List<Map<String, dynamic>> calculateLoss() {
     final keys = referenceData.keys.toList()..sort();
@@ -449,20 +472,50 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     });
   }
 
-  // Helper method to calculate coupler losses using reference data
   List<double> _calculateCouplerLosses(
       int ratio, double inputPower, String wavelength) {
-    final calculator = CouplerCalculator(inputPower);
+    // Get the base value from the CouplerCalculator class
+    final calculator = CouplerCalculator(1.0); // Use 1.0 as base value
     final calculatedData = calculator.calculateLoss();
 
     final section = wavelength == '1310' ? 'LOSS-13 10' : 'LOSS-15 50';
-    final sectionData = calculatedData.firstWhere(
-      (s) => s['section'] == section,
-      orElse: () => calculatedData[0],
-    );
+
+    // Find the section data
+    Map<String, dynamic>? sectionData;
+    for (var data in calculatedData) {
+      if (data['section'] == section) {
+        sectionData = data;
+        break;
+      }
+    }
+
+    if (sectionData == null) {
+      // Fallback if section not found
+      final dataList =
+          (calculatedData[0]['data'] as List).cast<Map<String, dynamic>>();
+      final entry = dataList.firstWhere(
+        (e) => e['ratio'] == ratio,
+        orElse: () => dataList.first,
+      );
+
+      final val1 = (entry['val1'] as num).toDouble();
+      final val2 = (entry['val2'] as num).toDouble();
+
+      // Calculate outputs based on input power adjustment
+      // This is the CRITICAL FIX: The reference values are for input power = 1.0
+      // We need to adjust them based on actual input power
+      final powerAdjustment = inputPower - 1.0;
+      final output1 = val1 + powerAdjustment;
+      final output2 = val2 + powerAdjustment;
+
+      // Device loss = input - output (positive value means power loss)
+      final loss1 = inputPower - output1;
+      final loss2 = inputPower - output2;
+
+      return [output1, output2, loss1, loss2];
+    }
 
     final dataList = (sectionData['data'] as List).cast<Map<String, dynamic>>();
-
     final entry = dataList.firstWhere(
       (e) => e['ratio'] == ratio,
       orElse: () => dataList.first,
@@ -471,21 +524,18 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     final val1 = (entry['val1'] as num).toDouble();
     final val2 = (entry['val2'] as num).toDouble();
 
-    // CRITICAL FIX: For ALL input powers, calculate loss correctly
-    final loss1 = inputPower - val1;
-    final loss2 = inputPower - val2;
+    // CRITICAL FIX: Adjust reference values based on input power
+    // The reference data (val1, val2) is for input power = 1.0
+    // For different input power, we need to adjust proportionally
+    final powerAdjustment = inputPower - 1.0;
+    final output1 = val1 + powerAdjustment;
+    final output2 = val2 + powerAdjustment;
 
-    print(
-        'DEBUG Coupler Calc: Input=$inputPower, Ratio=$ratio, Wavelength=$wavelength');
-    print('  Output1=$val1 (Loss=${loss1.toStringAsFixed(2)}dB)');
-    print('  Output2=$val2 (Loss=${loss2.toStringAsFixed(2)}dB)');
+    // Device loss = how much power was lost (input - output)
+    final loss1 = inputPower - output1;
+    final loss2 = inputPower - output2;
 
-    return [
-      val1, // Output power for port 1
-      val2, // Output power for port 2
-      loss1, // Loss value for port 1
-      loss2 // Loss value for port 2
-    ];
+    return [output1, output2, loss1, loss2];
   }
 
   void _recalculate(DiagramNode node) {
@@ -493,6 +543,8 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
 
     final wavelength = node.wavelength;
     final wdmLoss = node.useWdm ? node.wdmLoss : 0.0;
+    final wdmInputPower =
+        node.useWdm ? (double.tryParse(_wdmPowerCtrl.text) ?? 0.0) : 0.0;
 
     if (node.isCoupler && node.deviceConfig != null && !node.isCouplerOutput) {
       final parts = node.deviceConfig!.split('::');
@@ -512,13 +564,26 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
         child.wdmLoss = node.wdmLoss;
 
         if (i == 0) {
-          // Apply WDM loss and distance loss to reference output
-          child.signal = output1Power - wdmLoss - dLoss;
-          child.deviceLoss = losses[2]; // Update loss value
+          // Apply distance loss to reference output (NO wdmLoss)
+          child.signal = output1Power - dLoss; // REMOVED wdmLoss
+          child.deviceLoss = losses[2];
         } else if (i == 1) {
-          // Apply WDM loss and distance loss to reference output
-          child.signal = output2Power - wdmLoss - dLoss;
-          child.deviceLoss = losses[3]; // Update loss value
+          // Apply distance loss to reference output (NO wdmLoss)
+          child.signal = output2Power - dLoss; // REMOVED wdmLoss
+          child.deviceLoss = losses[3];
+        }
+
+        // FIXED: Also update WDM output power if enabled
+        if (node.useWdm) {
+          final wdmLosses =
+              _calculateCouplerLosses(ratio, wdmInputPower, wavelength);
+          if (i == 0) {
+            child.wdmOutputPower = wdmLosses[0] - dLoss;
+          } else if (i == 1) {
+            child.wdmOutputPower = wdmLosses[1] - dLoss;
+          }
+        } else {
+          child.wdmOutputPower = 0.0;
         }
 
         _recalculate(child);
@@ -590,8 +655,8 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     if (newPower != root!.signal) {
       setState(() {
         root!.signal = newPower;
-        // Force recalculation of entire tree
-        _recalculate(root!);
+        // ONLY use _recalculateAll - remove _recalculate call
+        _recalculateAll(root!);
       });
     }
   }
@@ -605,7 +670,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       root!.useWdm = _useWdm;
       root!.wdmLoss = _wdmLoss;
 
-      // Force recalculate ALL children with new values
+      // ONLY use _recalculateAll - remove _recalculate call
       _recalculateAll(root!);
     });
   }
@@ -619,36 +684,51 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       child.useWdm = node.useWdm;
       child.wdmLoss = node.wdmLoss;
 
-      // If it's a coupler output, recalculate with current parent power
       if (child.isCouplerOutput) {
         final ratio = child.couplerRatio ?? 50;
-        final losses =
-            _calculateCouplerLosses(ratio, node.signal, node.wavelength);
         final fiberLoss = child.fiberLoss;
-        // REMOVE THIS LINE: final wdmLoss = node.useWdm ? node.wdmLoss : 0.0;
 
-        // Check if this child is the first output by comparing with parent's children
+        // Get reference outputs for the current ratio and wavelength
+        final calculator = CouplerCalculator(1.0);
+        final outputs =
+            calculator.calculateOutputsForRatio(ratio, node.wavelength);
+        final val1 = outputs[0]; // Reference output 1 (for 1.0 input)
+        final val2 = outputs[1]; // Reference output 2 (for 1.0 input)
+
+        // Adjust based on actual input power
+        final inputPower = node.signal;
+        final output1Power = val1 + (inputPower - 1.0);
+        final output2Power = val2 + (inputPower - 1.0);
+
+        // Check if this child is the first output
         final isFirstOutput = node.children.indexOf(child) == 0;
 
         if (isFirstOutput) {
-          // First output gets losses[0] and losses[2]
-          child.signal = losses[0] - fiberLoss; // REMOVED wdmLoss
-          child.deviceLoss = losses[2];
+          child.signal = output1Power - fiberLoss;
+          child.deviceLoss = inputPower - output1Power;
         } else {
-          // Second output gets losses[1] and losses[3]
-          child.signal = losses[1] - fiberLoss; // REMOVED wdmLoss
-          child.deviceLoss = losses[3];
+          child.signal = output2Power - fiberLoss;
+          child.deviceLoss = inputPower - output2Power;
         }
 
-        // Recalculate WDM if enabled
+        // Calculate WDM if enabled - FIXED FOR BOTH SIDES
         if (node.useWdm) {
           final wdmInput = double.tryParse(_wdmPowerCtrl.text) ?? 0.0;
-          final wdmLosses =
-              _calculateCouplerLosses(ratio, wdmInput, node.wavelength);
+
+          // Get WDM outputs using the same ratio calculation
+          final wdmOutputs =
+              calculator.calculateOutputsForRatio(ratio, node.wavelength);
+          final wdmVal1 = wdmOutputs[0];
+          final wdmVal2 = wdmOutputs[1];
+
+          // Adjust WDM outputs based on WDM input power
+          final wdmOutput1Power = wdmVal1 + (wdmInput - 1.0);
+          final wdmOutput2Power = wdmVal2 + (wdmInput - 1.0);
+
           if (isFirstOutput) {
-            child.wdmOutputPower = wdmLosses[0] - fiberLoss;
+            child.wdmOutputPower = wdmOutput1Power - fiberLoss;
           } else {
-            child.wdmOutputPower = wdmLosses[1] - fiberLoss;
+            child.wdmOutputPower = wdmOutput2Power - fiberLoss;
           }
         } else {
           child.wdmOutputPower = 0.0;
@@ -995,26 +1075,19 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                         ],
                       ),
                       const SizedBox(height: 8),
+                      // In _addCoupler dialog, replace the Builder section inside the blue info container:
+                      // In _addCoupler dialog - replace the Builder inside blue container:
                       Builder(
                         builder: (context) {
-                          final losses = _calculateCouplerLosses(
+                          final outputs = _calculateCouplerLosses(
                               ratio, parent.signal, parent.wavelength);
-                          return Column(
-                            children: [
-                              Text(
-                                'Expected Output: ${losses[0].toStringAsFixed(2)} dBm : ${losses[1].toStringAsFixed(2)} dBm',
-                                style: const TextStyle(
-                                  color: Colors.blue,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              Text(
-                                'Losses: ${losses[2].toStringAsFixed(2)} dB : ${losses[3].toStringAsFixed(2)} dB',
-                                style: const TextStyle(
-                                    color: Colors.blue, fontSize: 11),
-                              ),
-                            ],
+                          return Text(
+                            'Expected Output: ${outputs[0].toStringAsFixed(2)} dBm : ${outputs[1].toStringAsFixed(2)} dBm',
+                            style: const TextStyle(
+                              color: Colors.blue,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
                           );
                         },
                       ),
@@ -1064,6 +1137,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                       const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12))),
+              // In _addCoupler, replace the onPressed section:
               onPressed: showWdmWarning
                   ? null
                   : () {
@@ -1078,36 +1152,26 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
 
                         final couplerName =
                             labelCtrl.text.isEmpty ? 'Coupler' : labelCtrl.text;
-
                         final fiberLoss = distance * fiberAttenuationDbPerKm;
 
-                        final losses = _calculateCouplerLosses(
-                            ratio, parent.signal, parent.wavelength);
-                        final output1Power = losses[0];
-                        final output2Power = losses[1];
+                        // Get reference outputs using the helper method
+                        final calculator = CouplerCalculator(1.0);
+                        final outputs = calculator.calculateOutputsForRatio(
+                            ratio, parent.wavelength);
+                        final val1 =
+                            outputs[0]; // Reference output 1 (for 1.0 input)
+                        final val2 =
+                            outputs[1]; // Reference output 2 (for 1.0 input)
 
-                        double wdm1Power = 0.0;
-                        double wdm2Power = 0.0;
-
-                        if (parent.useWdm) {
-                          final wdmInput =
-                              double.tryParse(_wdmPowerCtrl.text) ?? 0.0;
-                          final wdmLosses = _calculateCouplerLosses(
-                              ratio, wdmInput, parent.wavelength);
-                          wdm1Power = wdmLosses[0] - fiberLoss;
-                          wdm2Power = wdmLosses[1] - fiberLoss;
-                        }
-
-                        final output1Signal = output1Power - fiberLoss;
-                        final output2Signal = output2Power - fiberLoss;
-
-                        final device1Loss = losses[2];
-                        final device2Loss = losses[3];
+                        // Adjust based on actual input power
+                        final inputPower = parent.signal;
+                        final output1Power = val1 + (inputPower - 1.0);
+                        final output2Power = val2 + (inputPower - 1.0);
 
                         final output1 = DiagramNode(
                           id: _nodeCounter++,
                           label: '$couplerName $ratio',
-                          signal: output1Signal,
+                          signal: output1Power - fiberLoss,
                           distance: distance,
                           parentId: parent.id,
                           deviceType: 'coupler',
@@ -1115,17 +1179,24 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                           wavelength: parent.wavelength,
                           useWdm: parent.useWdm,
                           wdmLoss: parent.wdmLoss,
-                          wdmOutputPower: wdm1Power,
+                          wdmOutputPower: parent.useWdm
+                              ? (calculator.calculateOutputsForRatio(
+                                          ratio, parent.wavelength)[0] +
+                                      (double.tryParse(_wdmPowerCtrl.text) ??
+                                          0.0) -
+                                      1.0) -
+                                  fiberLoss
+                              : 0.0,
                           couplerRatio: ratio,
                           isCouplerOutput: true,
-                          deviceLoss: device1Loss,
+                          deviceLoss: inputPower - output1Power,
                           fiberLoss: fiberLoss,
                         );
 
                         final output2 = DiagramNode(
                           id: _nodeCounter++,
                           label: '$couplerName ${100 - ratio}',
-                          signal: output2Signal,
+                          signal: output2Power - fiberLoss,
                           distance: distance,
                           parentId: parent.id,
                           deviceType: 'coupler',
@@ -1133,16 +1204,23 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                           wavelength: parent.wavelength,
                           useWdm: parent.useWdm,
                           wdmLoss: parent.wdmLoss,
-                          wdmOutputPower: wdm2Power,
+                          wdmOutputPower: parent.useWdm
+                              ? (calculator.calculateOutputsForRatio(
+                                          ratio, parent.wavelength)[1] +
+                                      (double.tryParse(_wdmPowerCtrl.text) ??
+                                          0.0) -
+                                      1.0) -
+                                  fiberLoss
+                              : 0.0,
                           couplerRatio: 100 - ratio,
                           isCouplerOutput: true,
-                          deviceLoss: device2Loss,
+                          deviceLoss: inputPower - output2Power,
                           fiberLoss: fiberLoss,
                         );
 
                         parent.children.add(output1);
                         parent.children.add(output2);
-                        _recalculate(root!);
+                        _recalculateAll(root!);
                       });
                       Navigator.pop(ctx);
                     },
@@ -1589,9 +1667,11 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                   },
                 ),
                 const SizedBox(height: 16),
+                // In _editNode dialog, replace the Builder section:
+                // In _editNode - replace the Builder section:
                 Builder(
                   builder: (context) {
-                    final losses = _calculateCouplerLosses(
+                    final outputs = _calculateCouplerLosses(
                         newRatio, parent.signal, parent.wavelength);
                     return Container(
                       padding: const EdgeInsets.all(12),
@@ -1600,22 +1680,13 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(color: Colors.blue.shade200),
                       ),
-                      child: Column(
-                        children: [
-                          Text(
-                            'Expected Output: ${losses[0].toStringAsFixed(2)} dBm : ${losses[1].toStringAsFixed(2)} dBm',
-                            style: const TextStyle(
-                              color: Colors.blue,
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          Text(
-                            'Losses: ${losses[2].toStringAsFixed(2)} dB : ${losses[3].toStringAsFixed(2)} dB',
-                            style: const TextStyle(
-                                color: Colors.blue, fontSize: 11),
-                          ),
-                        ],
+                      child: Text(
+                        'Expected Output: ${outputs[0].toStringAsFixed(2)} dBm : ${outputs[1].toStringAsFixed(2)} dBm',
+                        style: const TextStyle(
+                          color: Colors.blue,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     );
                   },
@@ -1672,10 +1743,15 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                             final fiberLoss =
                                 distance * fiberAttenuationDbPerKm;
 
-                            final losses = _calculateCouplerLosses(
-                                newRatio, parent.signal, parent.wavelength);
-                            final output1Power = losses[0];
-                            final output2Power = losses[1];
+                            final calculator = CouplerCalculator(1.0);
+                            final outputs = calculator.calculateOutputsForRatio(
+                                newRatio, parent.wavelength);
+                            final val1 = outputs[0];
+                            final val2 = outputs[1];
+
+                            final inputPower = parent.signal;
+                            final output1Power = val1 + (inputPower - 1.0);
+                            final output2Power = val2 + (inputPower - 1.0);
 
                             // Calculate WDM outputs if enabled
                             double wdm1Power = 0.0;
@@ -1683,10 +1759,16 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                             if (parent.useWdm) {
                               final wdmInput =
                                   double.tryParse(_wdmPowerCtrl.text) ?? 0.0;
-                              final wdmLosses = _calculateCouplerLosses(
-                                  newRatio, wdmInput, parent.wavelength);
-                              wdm1Power = wdmLosses[0] - fiberLoss;
-                              wdm2Power = wdmLosses[1] - fiberLoss;
+                              final wdmOutputs =
+                                  calculator.calculateOutputsForRatio(
+                                      newRatio, parent.wavelength);
+                              final wdmVal1 = wdmOutputs[0];
+                              final wdmVal2 = wdmOutputs[1];
+
+                              wdm1Power =
+                                  (wdmVal1 + (wdmInput - 1.0)) - fiberLoss;
+                              wdm2Power =
+                                  (wdmVal2 + (wdmInput - 1.0)) - fiberLoss;
                             }
 
                             // Update first output
@@ -1694,7 +1776,8 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                             parent.children[0].label = '$newRatio';
                             parent.children[0].signal =
                                 output1Power - fiberLoss;
-                            parent.children[0].deviceLoss = losses[2];
+                            parent.children[0].deviceLoss =
+                                inputPower - output1Power;
                             parent.children[0].deviceConfig = '$newRatio::1.0';
                             parent.children[0].wdmOutputPower = wdm1Power;
 
@@ -1704,13 +1787,14 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                               parent.children[1].label = '${100 - newRatio}';
                               parent.children[1].signal =
                                   output2Power - fiberLoss;
-                              parent.children[1].deviceLoss = losses[3];
+                              parent.children[1].deviceLoss =
+                                  inputPower - output2Power;
                               parent.children[1].deviceConfig =
                                   '$newRatio::1.0';
                               parent.children[1].wdmOutputPower = wdm2Power;
                             }
 
-                            _recalculate(root!);
+                            _recalculateAll(root!);
                           });
                           Navigator.pop(ctx);
                         },
