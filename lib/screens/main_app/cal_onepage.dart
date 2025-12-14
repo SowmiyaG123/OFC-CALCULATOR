@@ -84,25 +84,23 @@ class WDMCalculator {
     return results;
   }
 
-  // WDM Splitter data - SAME as LOSS-13 10 splitter
   List<Map<String, dynamic>> calculateWDMSplitter() {
     final List<int> splits = [2, 4, 8, 16, 32, 64];
-    
-    // Base values for splitter - SAME as LOSS-13 10 splitter base values
+
+    // Base values - EXACT SAME as LOSS-13 10 splitter
     final baseValues = [-3.0, -6.4, -9.9, -13.2, -16.4, -19.4];
-    
-    // Adjust based on input value (same logic as splitter calculator)
+
+    // EXACT SAME LOGIC as LOSS-13 10 splitter calculator
     final adjust = wdmValue - 1.0;
-    
+
     List<Map<String, dynamic>> results = [];
     for (int i = 0; i < splits.length; i++) {
-      final value = baseValues[i] + adjust;
+      final value = baseValues[i] + adjust; // EXACT same as LOSS-13 10
       results.add({
         'split': splits[i],
         'value': double.parse(value.toStringAsFixed(1))
       });
     }
-    
     return results;
   }
 }
@@ -279,7 +277,7 @@ class CouplerSplitterOnePage extends StatefulWidget {
 class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
   final TextEditingController _couplerCtrl = TextEditingController(text: "1.0");
   final TextEditingController _wdmCtrl = TextEditingController(text: "3.0");
-  
+
   List<Map<String, dynamic>> _couplerResults = [];
   Map<String, List<Map<String, dynamic>>> _splitterResults = {};
   List<Map<String, double>> _wdmCouplerResults = [];
@@ -296,7 +294,8 @@ class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
     }
 
     final couplerCalc = CouplerCalculator(couplerValue);
-    final splitterCalc = SplitterCalculator(couplerValue); // Use same value for splitter
+    final splitterCalc =
+        SplitterCalculator(couplerValue); // Use same value for splitter
     final wdmCalc = WDMCalculator(wdmValue: wdmValue);
 
     setState(() {
@@ -389,7 +388,7 @@ class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
     if (_wdmCouplerResults.isEmpty && _wdmSplitterResults.isEmpty) {
       return Container();
     }
-    
+
     return Container(
       padding: const EdgeInsets.all(16.0),
       child: Column(
@@ -417,40 +416,36 @@ class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
               ),
             );
           }),
-          
-          const SizedBox(height: 16),
-          
-          // WDM Splitter section
-          ..._wdmSplitterResults.map((r) {
-            final split = r['split'];
-            final value = (r['value'] as double).toStringAsFixed(1);
 
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Text(
-                '1x$split = $value',
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontFamily: 'monospace',
-                  height: 1.5,
-                  color: Colors.black,
-                ),
-              ),
-            );
-          }),
-          
-          const SizedBox(height: 12),
-          const Padding(
-            padding: EdgeInsets.only(top: 8),
-            child: Text(
-              'Note: WDM outputs calculated using coupler reference table (1550nm only)',
-              style: TextStyle(
-                fontSize: 12,
-                fontStyle: FontStyle.italic,
-                color: Colors.grey,
-              ),
+          const SizedBox(height: 40),
+
+          // WDM Splitter section - Add a title like the others
+          if (_wdmSplitterResults.isNotEmpty)
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // You might want to add a title here, or keep it as is
+                // _buildSectionTitle('WDM Splitter'),
+                const SizedBox(height: 18),
+                ..._wdmSplitterResults.map((r) {
+                  final split = r['split'];
+                  final value = (r['value'] as double).toStringAsFixed(1);
+
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Text(
+                      '1x$split = $value',
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontFamily: 'monospace',
+                        height: 1.5,
+                        color: Colors.black,
+                      ),
+                    ),
+                  );
+                }),
+              ],
             ),
-          ),
         ],
       ),
     );
@@ -536,15 +531,15 @@ class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
               ),
             ),
           ),
-          
+
           // Results section
           Expanded(
             child: SingleChildScrollView(
               padding: const EdgeInsets.symmetric(horizontal: 12),
               child: Column(
                 children: [
-                  if (_couplerResults.isNotEmpty || 
-                      _splitterResults.isNotEmpty || 
+                  if (_couplerResults.isNotEmpty ||
+                      _splitterResults.isNotEmpty ||
                       _wdmCouplerResults.isNotEmpty)
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -563,18 +558,18 @@ class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
                                       _couplerResults.firstWhere(
                                           (s) => s['section'] == 'LOSS-15 50')),
                                 if (_splitterResults['LOSS-15 50'] != null)
-                                  _buildSplitterSection('',
-                                      _splitterResults['LOSS-15 50']!),
+                                  _buildSplitterSection(
+                                      '', _splitterResults['LOSS-15 50']!),
                               ],
                             ),
                           ),
                         ),
-                        
+
                         // Middle column - LOSS-13 10
                         Expanded(
                           child: Card(
                             elevation: 2,
-                            margin: const EdgeInsets.symmetric(horizontal: 6, vertical: 16),
+                            margin: const EdgeInsets.only(right: 6, bottom: 16),
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12)),
                             child: Column(
@@ -584,18 +579,18 @@ class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
                                       _couplerResults.firstWhere(
                                           (s) => s['section'] == 'LOSS-13 10')),
                                 if (_splitterResults['LOSS-13 10'] != null)
-                                  _buildSplitterSection('',
-                                      _splitterResults['LOSS-13 10']!),
+                                  _buildSplitterSection(
+                                      '', _splitterResults['LOSS-13 10']!),
                               ],
                             ),
                           ),
                         ),
-                        
+
                         // Right column - WDM Calculator
                         Expanded(
                           child: Card(
                             elevation: 2,
-                            margin: const EdgeInsets.only(left: 6, bottom: 16),
+                            margin: const EdgeInsets.only(right: 6, bottom: 16),
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12)),
                             child: _buildWDMSection(),
