@@ -10,6 +10,7 @@ import '../../html_stub.dart' if (dart.library.html) '../../html_real.dart'
     as html;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:math' as math;
+import '../main_app/wdm_calculator_page.dart';
 
 // ---------------- Helper Functions ----------------
 const double ln10 = 2.302585092994046;
@@ -251,7 +252,7 @@ class CouplerCalculator {
   }
 }
 
-// ---------------- SplitterCalculator (CORRECTED) ----------------
+// ---------------- SplitterCalculator (CORRECTED to match calculator) ----------------
 class SplitterCalculator {
   final double splitterValue;
   SplitterCalculator(this.splitterValue);
@@ -261,18 +262,19 @@ class SplitterCalculator {
   Map<String, List<Map<String, dynamic>>> calculateLoss() {
     Map<String, List<Map<String, dynamic>>> result = {};
 
-    // BASE LOSS VALUES from calculator (these are NEGATIVE in calculator)
+    // BASE LOSS VALUES - EXACT SAME as calculator page
     final baseLoss1550 = [-3.6, -6.8, -10.0, -13.0, -16.0, -19.5];
     final baseLoss1310 = [-3.0, -6.4, -9.9, -13.2, -16.4, -19.4];
 
-    final adjust = splitterValue;
+    // IMPORTANT: Use splitterValue - 1.0 (matches calculator page)
+    final adjust = splitterValue - 1.0;
 
     result["LOSS-15 50"] = List.generate(
         splits.length,
         (i) => {
               'split': splits[i],
               'value':
-                  double.parse((baseLoss1550[i] + adjust).toStringAsFixed(2))
+                  double.parse((baseLoss1550[i] + adjust).toStringAsFixed(1))
             });
 
     result["LOSS-13 10"] = List.generate(
@@ -280,7 +282,7 @@ class SplitterCalculator {
         (i) => {
               'split': splits[i],
               'value':
-                  double.parse((baseLoss1310[i] + adjust).toStringAsFixed(2))
+                  double.parse((baseLoss1310[i] + adjust).toStringAsFixed(1))
             });
 
     return result;
@@ -474,25 +476,23 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
 
   List<double> _calculateCouplerLosses(
       int ratio, double inputPower, String wavelength) {
-    // Get the base value from the CouplerCalculator class
-    final calculator = CouplerCalculator(1.0); // Use 1.0 as base value
-    final calculatedData = calculator.calculateLoss();
+    // For WDM mode - use EXACT same logic as LOSS-13 10
+    if (root?.useWdm == true && wavelength == '1550') {
+      final wdmInput = double.tryParse(_wdmPowerCtrl.text) ?? 0.0;
 
-    final section = wavelength == '1310' ? 'LOSS-13 10' : 'LOSS-15 50';
+      // Use EXACT same calculator as LOSS-13 10
+      final calculator = CouplerCalculator(wdmInput);
+      final calculatedData = calculator.calculateLoss();
 
-    // Find the section data
-    Map<String, dynamic>? sectionData;
-    for (var data in calculatedData) {
-      if (data['section'] == section) {
-        sectionData = data;
-        break;
-      }
-    }
+      // Get LOSS-13 10 section (WDM = LOSS-13 10)
+      final section = 'LOSS-13 10';
+      final sectionData = calculatedData.firstWhere(
+        (s) => s['section'] == section,
+        orElse: () => calculatedData[0],
+      );
 
-    if (sectionData == null) {
-      // Fallback if section not found
       final dataList =
-          (calculatedData[0]['data'] as List).cast<Map<String, dynamic>>();
+          (sectionData['data'] as List).cast<Map<String, dynamic>>();
       final entry = dataList.firstWhere(
         (e) => e['ratio'] == ratio,
         orElse: () => dataList.first,
@@ -501,19 +501,27 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       final val1 = (entry['val1'] as num).toDouble();
       final val2 = (entry['val2'] as num).toDouble();
 
-      // Calculate outputs based on input power adjustment
-      // This is the CRITICAL FIX: The reference values are for input power = 1.0
-      // We need to adjust them based on actual input power
-      final powerAdjustment = inputPower - 1.0;
+      // Adjust for actual WDM input power
+      final powerAdjustment = wdmInput - 1.0;
       final output1 = val1 + powerAdjustment;
       final output2 = val2 + powerAdjustment;
 
-      // Device loss = input - output (positive value means power loss)
-      final loss1 = inputPower - output1;
-      final loss2 = inputPower - output2;
+      // Device loss = how much power was lost (input - output)
+      final loss1 = wdmInput - output1;
+      final loss2 = wdmInput - output2;
 
       return [output1, output2, loss1, loss2];
     }
+
+    // For regular (non-WDM) calculations - use appropriate wavelength
+    final calculator = CouplerCalculator(1.0);
+    final calculatedData = calculator.calculateLoss();
+
+    final section = wavelength == '1310' ? 'LOSS-13 10' : 'LOSS-15 50';
+    final sectionData = calculatedData.firstWhere(
+      (s) => s['section'] == section,
+      orElse: () => calculatedData[0],
+    );
 
     final dataList = (sectionData['data'] as List).cast<Map<String, dynamic>>();
     final entry = dataList.firstWhere(
@@ -524,14 +532,12 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     final val1 = (entry['val1'] as num).toDouble();
     final val2 = (entry['val2'] as num).toDouble();
 
-    // CRITICAL FIX: Adjust reference values based on input power
-    // The reference data (val1, val2) is for input power = 1.0
-    // For different input power, we need to adjust proportionally
+    // Adjust for actual input power
     final powerAdjustment = inputPower - 1.0;
     final output1 = val1 + powerAdjustment;
     final output2 = val2 + powerAdjustment;
 
-    // Device loss = how much power was lost (input - output)
+    // Device loss = input - output
     final loss1 = inputPower - output1;
     final loss2 = inputPower - output2;
 
@@ -650,6 +656,113 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     }
   }
 
+  void _recalculateAll(DiagramNode node) {
+    if (node.children.isEmpty) return;
+
+    for (var child in node.children) {
+      child.wavelength = node.wavelength;
+      child.useWdm = node.useWdm;
+      child.wdmLoss = node.wdmLoss;
+
+      if (child.isCouplerOutput) {
+        final ratio = child.couplerRatio ?? 50;
+        final fiberLoss = child.fiberLoss;
+        final inputPower = node.signal;
+        final isFirstOutput = node.children.indexOf(child) == 0;
+
+        // For regular coupler calculation (non-WDM)
+        // Use the corrected calculation method
+        final outputs =
+            _calculateCouplerLosses(ratio, inputPower, node.wavelength);
+        final output1Power = outputs[0];
+        final output2Power = outputs[1];
+
+        if (isFirstOutput) {
+          // LEFT SIDE: Keep as is
+          child.signal = output1Power - fiberLoss;
+          child.deviceLoss = outputs[2]; // loss1 from calculateCouplerLosses
+        } else {
+          // RIGHT SIDE: Use direct output
+          child.signal = output2Power - fiberLoss;
+          child.deviceLoss = outputs[3]; // loss2 from calculateCouplerLosses
+        }
+
+        // Calculate WDM output power if enabled
+        if (node.useWdm && node.wavelength == '1550') {
+          final wdmInput = double.tryParse(_wdmPowerCtrl.text) ?? 0.0;
+          final wdmCalculator = WDMCalculator(wdmValue: wdmInput);
+          final wdmCouplerResults = wdmCalculator.calculateWDMCoupler();
+
+          final wdmEntry = wdmCouplerResults.firstWhere(
+            (e) => e['ratio'] == ratio,
+            orElse: () => wdmCouplerResults.first,
+          );
+
+          final wdmVal1 = wdmEntry['val1']!;
+          final wdmVal2 = wdmEntry['val2']!;
+
+          // Adjust for actual WDM input power
+          final wdmPowerAdjustment = wdmInput - 1.0;
+          final wdmOutput1 = wdmVal1 + wdmPowerAdjustment - fiberLoss;
+          final wdmOutput2 = wdmVal2 + wdmPowerAdjustment - fiberLoss;
+
+          if (isFirstOutput) {
+            child.wdmOutputPower = wdmOutput1;
+          } else {
+            child.wdmOutputPower = wdmOutput2; // Direct value
+          }
+        } else {
+          child.wdmOutputPower = 0.0;
+        }
+      } else if (child.isSplitterOutput) {
+        // Splitter logic remains the same
+        final parts = child.deviceConfig?.split('::');
+        if (parts != null && parts.length >= 2) {
+          final split = int.tryParse(parts[0]) ?? 2;
+          final splitterVal = double.tryParse(parts[1]) ?? 0.0;
+          final fiberLoss = child.fiberLoss;
+
+          // For WDM splitter
+          if (node.useWdm && node.wavelength == '1550') {
+            final wdmInput = double.tryParse(_wdmPowerCtrl.text) ?? 0.0;
+            final wdmCalculator = WDMCalculator(wdmValue: wdmInput);
+            final wdmSplitterResults = wdmCalculator.calculateWDMSplitter();
+
+            final entry = wdmSplitterResults.firstWhere(
+              (e) => e['split'] == split,
+              orElse: () => wdmSplitterResults.first,
+            );
+
+            final splitterLossValue = (entry['value'] as num).toDouble();
+            final splitterLossDisplay = splitterLossValue.abs();
+
+            child.deviceLoss = splitterLossDisplay - fiberLoss;
+            child.signal = node.signal - splitterLossDisplay - fiberLoss;
+          } else {
+            // Regular splitter
+            final calc = SplitterCalculator(splitterVal);
+            final all = calc.calculateLoss();
+            final section =
+                node.wavelength == '1310' ? 'LOSS-13 10' : 'LOSS-15 50';
+            final sec = all[section]!;
+            final entry = sec.firstWhere(
+              (e) => e['split'] == split,
+              orElse: () => sec.first,
+            );
+
+            final splitterLossValue = (entry['value'] as num).toDouble();
+            final splitterLossDisplay = splitterLossValue.abs();
+
+            child.deviceLoss = splitterLossDisplay - fiberLoss;
+            child.signal = node.signal - splitterLossDisplay - fiberLoss;
+          }
+        }
+      }
+
+      _recalculateAll(child);
+    }
+  }
+
   void _onHeadendPowerChanged(String value) {
     final newPower = double.tryParse(value) ?? defaultHeadendDbm;
     if (newPower != root!.signal) {
@@ -673,92 +786,6 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       // ONLY use _recalculateAll - remove _recalculate call
       _recalculateAll(root!);
     });
-  }
-
-  void _recalculateAll(DiagramNode node) {
-    if (node.children.isEmpty) return;
-
-    for (var child in node.children) {
-      // Update wavelength and WDM settings
-      child.wavelength = node.wavelength;
-      child.useWdm = node.useWdm;
-      child.wdmLoss = node.wdmLoss;
-
-      if (child.isCouplerOutput) {
-        final ratio = child.couplerRatio ?? 50;
-        final fiberLoss = child.fiberLoss;
-
-        // Get reference outputs for the current ratio and wavelength
-        final calculator = CouplerCalculator(1.0);
-        final outputs =
-            calculator.calculateOutputsForRatio(ratio, node.wavelength);
-        final val1 = outputs[0]; // Reference output 1 (for 1.0 input)
-        final val2 = outputs[1]; // Reference output 2 (for 1.0 input)
-
-        // Adjust based on actual input power
-        final inputPower = node.signal;
-        final output1Power = val1 + (inputPower - 1.0);
-        final output2Power = val2 + (inputPower - 1.0);
-
-        // Check if this child is the first output
-        final isFirstOutput = node.children.indexOf(child) == 0;
-
-        if (isFirstOutput) {
-          child.signal = output1Power - fiberLoss;
-          child.deviceLoss = inputPower - output1Power;
-        } else {
-          child.signal = output2Power - fiberLoss;
-          child.deviceLoss = inputPower - output2Power;
-        }
-
-        // Calculate WDM if enabled - FIXED FOR BOTH SIDES
-        if (node.useWdm) {
-          final wdmInput = double.tryParse(_wdmPowerCtrl.text) ?? 0.0;
-
-          // Get WDM outputs using the same ratio calculation
-          final wdmOutputs =
-              calculator.calculateOutputsForRatio(ratio, node.wavelength);
-          final wdmVal1 = wdmOutputs[0];
-          final wdmVal2 = wdmOutputs[1];
-
-          // Adjust WDM outputs based on WDM input power
-          final wdmOutput1Power = wdmVal1 + (wdmInput - 1.0);
-          final wdmOutput2Power = wdmVal2 + (wdmInput - 1.0);
-
-          if (isFirstOutput) {
-            child.wdmOutputPower = wdmOutput1Power - fiberLoss;
-          } else {
-            child.wdmOutputPower = wdmOutput2Power - fiberLoss;
-          }
-        } else {
-          child.wdmOutputPower = 0.0;
-        }
-      } else if (child.isSplitterOutput) {
-        // Splitter outputs share the same signal, just propagate
-        final parts = child.deviceConfig?.split('::');
-        if (parts != null && parts.length >= 2) {
-          final split = int.tryParse(parts[0]) ?? 2;
-          final splitterVal = double.tryParse(parts[1]) ?? 0.0;
-
-          final calc = SplitterCalculator(splitterVal);
-          final all = calc.calculateLoss();
-          final section =
-              node.wavelength == '1310' ? 'LOSS-13 10' : 'LOSS-15 50';
-          final sec = all[section]!;
-          final entry = sec.firstWhere((e) => e['split'] == split,
-              orElse: () => sec.first);
-
-          final splitterLossValue = (entry['value'] as num).toDouble();
-          final splitterLossDisplay = splitterLossValue.abs();
-          final fiberLoss = child.fiberLoss;
-
-          child.deviceLoss = splitterLossDisplay - fiberLoss;
-          child.signal = node.signal - splitterLossDisplay - fiberLoss;
-        }
-      }
-
-      _recalculateAll(child);
-    }
   }
 
   Future<void> _addSingleChild(DiagramNode parent) async {
@@ -857,15 +884,18 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
           ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel', style: TextStyle(fontSize: 16))),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel', style: TextStyle(fontSize: 16)),
+            ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF2E7D32),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12))),
+                backgroundColor: const Color(0xFF2E7D32),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
               onPressed: () {
                 setState(() {
                   double distance = showDistanceInput
@@ -905,9 +935,11 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                 });
                 Navigator.pop(ctx);
               },
-              child: const Text('Add Node',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-            )
+              child: const Text(
+                'Add Node',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ),
           ],
         );
       }),
@@ -1082,7 +1114,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                           final outputs = _calculateCouplerLosses(
                               ratio, parent.signal, parent.wavelength);
                           return Text(
-                            'Expected Output: ${outputs[0].toStringAsFixed(2)} dBm : ${outputs[1].toStringAsFixed(2)} dBm',
+                            'Expected Output: ${outputs[0].toStringAsFixed(1)} dBm : ${outputs[1].toStringAsFixed(1)} dBm',
                             style: const TextStyle(
                               color: Colors.blue,
                               fontSize: 12,
@@ -1153,20 +1185,42 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                         final couplerName =
                             labelCtrl.text.isEmpty ? 'Coupler' : labelCtrl.text;
                         final fiberLoss = distance * fiberAttenuationDbPerKm;
-
-                        // Get reference outputs using the helper method
-                        final calculator = CouplerCalculator(1.0);
-                        final outputs = calculator.calculateOutputsForRatio(
-                            ratio, parent.wavelength);
-                        final val1 =
-                            outputs[0]; // Reference output 1 (for 1.0 input)
-                        final val2 =
-                            outputs[1]; // Reference output 2 (for 1.0 input)
-
-                        // Adjust based on actual input power
                         final inputPower = parent.signal;
-                        final output1Power = val1 + (inputPower - 1.0);
-                        final output2Power = val2 + (inputPower - 1.0);
+
+                        // Calculate using the fixed method
+                        final outputs = _calculateCouplerLosses(
+                            ratio, inputPower, parent.wavelength);
+
+                        final output1Power = outputs[0];
+                        final output2Power = outputs[1];
+
+                        // Calculate WDM outputs if enabled
+                        double wdmOutput1 = 0.0;
+                        double wdmOutput2 = 0.0;
+
+                        if (parent.useWdm && parent.wavelength == '1550') {
+                          final wdmInput =
+                              double.tryParse(_wdmPowerCtrl.text) ?? 0.0;
+                          final wdmCalculator =
+                              WDMCalculator(wdmValue: wdmInput);
+                          final wdmCouplerResults =
+                              wdmCalculator.calculateWDMCoupler();
+
+                          final wdmEntry = wdmCouplerResults.firstWhere(
+                            (e) => e['ratio'] == ratio,
+                            orElse: () => wdmCouplerResults.first,
+                          );
+
+                          final wdmVal1 = wdmEntry['val1']!;
+                          final wdmVal2 = wdmEntry['val2']!;
+
+                          // Adjust for actual WDM input power
+                          final wdmPowerAdjustment = wdmInput - 1.0;
+                          wdmOutput1 =
+                              (wdmVal1 + wdmPowerAdjustment) - fiberLoss;
+                          wdmOutput2 =
+                              (wdmVal2 + wdmPowerAdjustment) - fiberLoss;
+                        }
 
                         final output1 = DiagramNode(
                           id: _nodeCounter++,
@@ -1179,24 +1233,18 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                           wavelength: parent.wavelength,
                           useWdm: parent.useWdm,
                           wdmLoss: parent.wdmLoss,
-                          wdmOutputPower: parent.useWdm
-                              ? (calculator.calculateOutputsForRatio(
-                                          ratio, parent.wavelength)[0] +
-                                      (double.tryParse(_wdmPowerCtrl.text) ??
-                                          0.0) -
-                                      1.0) -
-                                  fiberLoss
-                              : 0.0,
+                          wdmOutputPower: wdmOutput1,
                           couplerRatio: ratio,
                           isCouplerOutput: true,
-                          deviceLoss: inputPower - output1Power,
+                          deviceLoss: outputs[2], // loss1
                           fiberLoss: fiberLoss,
                         );
 
                         final output2 = DiagramNode(
                           id: _nodeCounter++,
                           label: '$couplerName ${100 - ratio}',
-                          signal: output2Power - fiberLoss,
+                          signal:
+                              output2Power - fiberLoss, // CHANGED: Remove -0.5
                           distance: distance,
                           parentId: parent.id,
                           deviceType: 'coupler',
@@ -1204,17 +1252,11 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                           wavelength: parent.wavelength,
                           useWdm: parent.useWdm,
                           wdmLoss: parent.wdmLoss,
-                          wdmOutputPower: parent.useWdm
-                              ? (calculator.calculateOutputsForRatio(
-                                          ratio, parent.wavelength)[1] +
-                                      (double.tryParse(_wdmPowerCtrl.text) ??
-                                          0.0) -
-                                      1.0) -
-                                  fiberLoss
-                              : 0.0,
+                          wdmOutputPower: wdmOutput2 -
+                              0.5, // Right side reduction for WDM too
                           couplerRatio: 100 - ratio,
                           isCouplerOutput: true,
-                          deviceLoss: inputPower - output2Power,
+                          deviceLoss: outputs[3], // loss2
                           fiberLoss: fiberLoss,
                         );
 
@@ -1393,6 +1435,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                 ],
 
                 // Calculation preview
+                // In _addSplitter dialog, update the calculation preview section:
                 Builder(
                   builder: (context) {
                     double distance = showDistanceInput
@@ -1405,8 +1448,9 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
 
                     final fiberLoss = distance * fiberAttenuationDbPerKm;
 
-                    // Use splitter value of 0.0 (exact values from calculator)
-                    final splitterVal = 0.0;
+                    // Use correct splitter value logic
+                    final splitterVal =
+                        1.0; // Default value as in calculator page
 
                     final calc = SplitterCalculator(splitterVal);
                     final all = calc.calculateLoss();
@@ -1425,8 +1469,6 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
 
                     // Get the ABSOLUTE value for display (positive)
                     final splitterLossDisplay = splitterLossValue.abs();
-
-                    final wdmLoss = parent.useWdm ? parent.wdmLoss : 0.0;
 
                     // CORRECT: Calculate device loss
                     final finalDeviceLoss = splitterLossDisplay - fiberLoss;
@@ -1466,7 +1508,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                           if (isBelowCoupler) ...[
                             const SizedBox(height: 8),
                             Text(
-                              'Splitter Loss: ${splitterLossDisplay.toStringAsFixed(2)} dB',
+                              'Splitter Loss: ${splitterLossDisplay.toStringAsFixed(1)} dB',
                               style: const TextStyle(
                                 color: Colors.purple,
                                 fontSize: 12,
@@ -1490,7 +1532,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                               ),
                             ],
                             Text(
-                              'Output Power: ${outputSignal.toStringAsFixed(2)} dBm',
+                              'Output Power: ${outputSignal.toStringAsFixed(1)} dBm',
                               style: const TextStyle(
                                 color: Colors.purple,
                                 fontSize: 12,
@@ -1599,211 +1641,293 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       final parent = _findNode(root, node.parentId!);
       if (parent == null) return;
 
-      // MOVE currentRatio and newRatio OUTSIDE StatefulBuilder
+      // Find which side this is
+      bool isRightSide = false;
       int currentRatio = node.couplerRatio ?? 50;
-      int newRatio = currentRatio;
-      bool showWdmWarning = false;
+
+      // Check if this is right side by looking at parent's children
+      if (parent.children.length > 1 && parent.children[1].id == node.id) {
+        isRightSide = true;
+        // For right side, calculate the actual ratio
+        currentRatio = 100 - (node.couplerRatio ?? 50);
+      }
 
       await showDialog(
         context: context,
-        builder: (ctx) => StatefulBuilder(builder: (ctx, setInner) {
-          // REMOVE: int newRatio = currentRatio; from here
+        builder: (ctx) {
+          // Create a new stateful widget for the dialog
+          return StatefulBuilder(builder: (dialogContext, setInnerState) {
+            int newRatio = currentRatio;
+            bool showWdmWarning = false;
 
-          void checkWdmValidation() {
-            final is1310Wavelength = _selectedWavelength == '1310';
-            final isWdmEnabled = _useWdm;
-            final isInvalidCombination = is1310Wavelength && isWdmEnabled;
-            setInner(() {
-              showWdmWarning = isInvalidCombination;
-            });
-          }
+            void checkWdmValidation() {
+              final is1310Wavelength = _selectedWavelength == '1310';
+              final isWdmEnabled = _useWdm;
+              final isInvalidCombination = is1310Wavelength && isWdmEnabled;
+              setInnerState(() {
+                showWdmWarning = isInvalidCombination;
+              });
+            }
 
-          checkWdmValidation();
+            checkWdmValidation();
 
-          return AlertDialog(
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                      color: const Color(0xFF0288D1).withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8)),
-                  child: const Icon(Icons.edit, color: Color(0xFF0288D1)),
-                ),
-                const SizedBox(width: 12),
-                const Text('Edit Coupler Ratio',
-                    style: TextStyle(fontWeight: FontWeight.bold)),
-              ],
-            ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text('Input Power: ${parent.signal.toStringAsFixed(2)} dBm',
-                    style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 16),
-                DropdownButtonFormField<int>(
-                  value: newRatio,
-                  decoration: InputDecoration(/*...*/),
-                  items: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
-                      .map((r) => DropdownMenuItem(
-                          value: r,
-                          child: Text('$r : ${100 - r}',
+            return AlertDialog(
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+              title: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                        color: const Color(0xFF0288D1).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8)),
+                    child: const Icon(Icons.edit, color: Color(0xFF0288D1)),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                      'Edit Coupler Ratio ${isRightSide ? "(Right Side)" : "(Left Side)"}',
+                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('Input Power: ${parent.signal.toStringAsFixed(2)} dBm',
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<int>(
+                    value: newRatio,
+                    decoration: InputDecoration(
+                      labelText: 'Split Ratio',
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      filled: true,
+                      fillColor: Colors.grey.shade50,
+                    ),
+                    items: [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+                        .map((r) => DropdownMenuItem(
+                              value: r,
+                              child: Text('$r : ${100 - r}',
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w500)),
+                            ))
+                        .toList(),
+                    onChanged: (v) {
+                      if (v != null) {
+                        setInnerState(() {
+                          newRatio = v;
+                        });
+                        checkWdmValidation();
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  Builder(
+                    builder: (context) {
+                      // Calculate the exact same way as in preview
+                      final calculator = CouplerCalculator(1.0);
+                      final calculatedData = calculator.calculateLoss();
+
+                      final section = parent.wavelength == '1310'
+                          ? 'LOSS-13 10'
+                          : 'LOSS-15 50';
+                      final sectionData = calculatedData.firstWhere(
+                        (s) => s['section'] == section,
+                        orElse: () => calculatedData[0],
+                      );
+
+                      final dataList = (sectionData['data'] as List)
+                          .cast<Map<String, dynamic>>();
+                      final entry = dataList.firstWhere(
+                        (e) => e['ratio'] == newRatio,
+                        orElse: () => dataList.first,
+                      );
+
+                      final val1 = (entry['val1'] as num).toDouble();
+                      final val2 = (entry['val2'] as num).toDouble();
+
+                      // Adjust for input power (reference is for 1.0)
+                      final inputPower = parent.signal;
+                      final output1Power = val1 + (inputPower - 1.0);
+                      final output2Power = val2 + (inputPower - 1.0);
+// No adjustment needed
+                      return Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.blue.shade200),
+                        ),
+                        child: Column(
+                          children: [
+                            Text(
+                              'Left Side: ${output1Power.toStringAsFixed(1)} dBm',
                               style: const TextStyle(
-                                  fontWeight: FontWeight.w500))))
-                      .toList(),
-                  onChanged: (v) {
-                    if (v != null) {
-                      // FIX: Update both variables
-                      newRatio = v;
-                      currentRatio = v;
-                      setInner(() {
-                        // Trigger rebuild
-                      });
-                      checkWdmValidation();
-                    }
-                  },
-                ),
-                const SizedBox(height: 16),
-                // In _editNode dialog, replace the Builder section:
-                // In _editNode - replace the Builder section:
-                Builder(
-                  builder: (context) {
-                    final outputs = _calculateCouplerLosses(
-                        newRatio, parent.signal, parent.wavelength);
-                    return Container(
+                                color: Colors.blue,
+                                fontSize: 12,
+                              ),
+                            ),
+                            Text(
+                              'Right Side: ${output2Power.toStringAsFixed(1)} dBm',
+                              style: const TextStyle(
+                                color: Colors.blue,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                  if (showWdmWarning) ...[
+                    const SizedBox(height: 12),
+                    Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Colors.blue.shade50,
+                        color: Colors.orange.shade50,
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.blue.shade200),
+                        border: Border.all(color: Colors.orange.shade200),
                       ),
-                      child: Text(
-                        'Expected Output: ${outputs[0].toStringAsFixed(2)} dBm : ${outputs[1].toStringAsFixed(2)} dBm',
-                        style: const TextStyle(
-                          color: Colors.blue,
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-                if (showWdmWarning) ...[
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.orange.shade50,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.orange.shade200),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.warning,
-                            color: Colors.orange, size: 20),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'WDM is only compatible with 1550nm wavelength',
-                            style: TextStyle(
-                              color: Colors.orange.shade800,
-                              fontWeight: FontWeight.w500,
-                              fontSize: 12,
+                      child: Row(
+                        children: [
+                          const Icon(Icons.warning,
+                              color: Colors.orange, size: 20),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'WDM is only compatible with 1550nm wavelength',
+                              style: TextStyle(
+                                color: Colors.orange.shade800,
+                                fontWeight: FontWeight.w500,
+                                fontSize: 12,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
+                  ],
                 ],
+              ),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child:
+                        const Text('Cancel', style: TextStyle(fontSize: 16))),
+                ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: showWdmWarning
+                            ? Colors.grey
+                            : const Color(0xFF0288D1),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 24, vertical: 12),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12))),
+                    onPressed: showWdmWarning
+                        ? null
+                        : () {
+                            setState(() {
+                              // Update both coupler outputs
+                              final distance = parent.children[0].distance;
+                              final fiberLoss =
+                                  distance * fiberAttenuationDbPerKm;
+                              final inputPower = parent.signal;
+
+                              // Calculate using the exact same method as preview
+                              final calculator = CouplerCalculator(1.0);
+                              final calculatedData = calculator.calculateLoss();
+
+                              final section = parent.wavelength == '1310'
+                                  ? 'LOSS-13 10'
+                                  : 'LOSS-15 50';
+                              final sectionData = calculatedData.firstWhere(
+                                (s) => s['section'] == section,
+                                orElse: () => calculatedData[0],
+                              );
+
+                              final dataList = (sectionData['data'] as List)
+                                  .cast<Map<String, dynamic>>();
+                              final entry = dataList.firstWhere(
+                                (e) => e['ratio'] == newRatio,
+                                orElse: () => dataList.first,
+                              );
+
+                              final val1 = (entry['val1'] as num).toDouble();
+                              final val2 = (entry['val2'] as num).toDouble();
+
+                              final output1Power = val1 + (inputPower - 1.0);
+                              final output2Power = val2 + (inputPower - 1.0);
+                              final adjustedOutput2Power = output2Power - 0.5;
+
+                              // Calculate WDM outputs if enabled - USE WDMCalculator properly
+                              double wdm1Power = 0.0;
+                              double wdm2Power = 0.0;
+
+                              if (parent.useWdm &&
+                                  _selectedWavelength == '1550') {
+                                final wdmInput =
+                                    double.tryParse(_wdmPowerCtrl.text) ?? 0.0;
+                                final wdmCalculator =
+                                    WDMCalculator(wdmValue: wdmInput);
+                                final wdmCouplerResults =
+                                    wdmCalculator.calculateWDMCoupler();
+
+                                final wdmEntry = wdmCouplerResults.firstWhere(
+                                  (e) => e['ratio'] == newRatio,
+                                  orElse: () => wdmCouplerResults.first,
+                                );
+
+                                final wdmVal1 = wdmEntry['val1']!;
+                                final wdmVal2 = wdmEntry['val2']!;
+
+                                // Adjust WDM values for input power difference
+                                wdm1Power =
+                                    (wdmVal1 + (wdmInput - 1.0)) - fiberLoss;
+                                wdm2Power =
+                                    (wdmVal2 + (wdmInput - 1.0)) - fiberLoss;
+                              }
+
+                              // Update first output (LEFT SIDE)
+                              if (parent.children.isNotEmpty) {
+                                parent.children[0].couplerRatio = newRatio;
+                                parent.children[0].label = '$newRatio';
+                                parent.children[0].signal =
+                                    output1Power - fiberLoss;
+                                parent.children[0].deviceLoss =
+                                    inputPower - output1Power;
+                                parent.children[0].deviceConfig =
+                                    '$newRatio::1.0';
+                                parent.children[0].wdmOutputPower = wdm1Power;
+                              }
+
+                              // Update second output (RIGHT SIDE)
+                              if (parent.children.length > 1) {
+                                parent.children[1].couplerRatio =
+                                    100 - newRatio;
+                                parent.children[1].label = '${100 - newRatio}';
+                                parent.children[1].signal =
+                                    output2Power - fiberLoss; // CHANGED
+                                parent.children[1].deviceLoss =
+                                    inputPower - adjustedOutput2Power;
+                                parent.children[1].deviceConfig =
+                                    '$newRatio::1.0';
+                                parent.children[1].wdmOutputPower = wdm2Power;
+                              }
+
+                              _recalculateAll(root!);
+                            });
+                            Navigator.pop(ctx);
+                          },
+                    child: const Text('Update Ratio',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.bold)))
               ],
-            ),
-            actions: [
-              TextButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('Cancel', style: TextStyle(fontSize: 16))),
-              ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                      backgroundColor: showWdmWarning
-                          ? Colors.grey
-                          : const Color(0xFF0288D1),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 24, vertical: 12),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12))),
-                  onPressed: showWdmWarning
-                      ? null
-                      : () {
-                          setState(() {
-                            // Update both coupler outputs
-                            final distance = parent.children[0].distance;
-                            final fiberLoss =
-                                distance * fiberAttenuationDbPerKm;
-
-                            final calculator = CouplerCalculator(1.0);
-                            final outputs = calculator.calculateOutputsForRatio(
-                                newRatio, parent.wavelength);
-                            final val1 = outputs[0];
-                            final val2 = outputs[1];
-
-                            final inputPower = parent.signal;
-                            final output1Power = val1 + (inputPower - 1.0);
-                            final output2Power = val2 + (inputPower - 1.0);
-
-                            // Calculate WDM outputs if enabled
-                            double wdm1Power = 0.0;
-                            double wdm2Power = 0.0;
-                            if (parent.useWdm) {
-                              final wdmInput =
-                                  double.tryParse(_wdmPowerCtrl.text) ?? 0.0;
-                              final wdmOutputs =
-                                  calculator.calculateOutputsForRatio(
-                                      newRatio, parent.wavelength);
-                              final wdmVal1 = wdmOutputs[0];
-                              final wdmVal2 = wdmOutputs[1];
-
-                              wdm1Power =
-                                  (wdmVal1 + (wdmInput - 1.0)) - fiberLoss;
-                              wdm2Power =
-                                  (wdmVal2 + (wdmInput - 1.0)) - fiberLoss;
-                            }
-
-                            // Update first output
-                            parent.children[0].couplerRatio = newRatio;
-                            parent.children[0].label = '$newRatio';
-                            parent.children[0].signal =
-                                output1Power - fiberLoss;
-                            parent.children[0].deviceLoss =
-                                inputPower - output1Power;
-                            parent.children[0].deviceConfig = '$newRatio::1.0';
-                            parent.children[0].wdmOutputPower = wdm1Power;
-
-                            // Update second output
-                            if (parent.children.length > 1) {
-                              parent.children[1].couplerRatio = 100 - newRatio;
-                              parent.children[1].label = '${100 - newRatio}';
-                              parent.children[1].signal =
-                                  output2Power - fiberLoss;
-                              parent.children[1].deviceLoss =
-                                  inputPower - output2Power;
-                              parent.children[1].deviceConfig =
-                                  '$newRatio::1.0';
-                              parent.children[1].wdmOutputPower = wdm2Power;
-                            }
-
-                            _recalculateAll(root!);
-                          });
-                          Navigator.pop(ctx);
-                        },
-                  child: const Text('Update Ratio',
-                      style:
-                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold)))
-            ],
-          );
-        }),
+            );
+          });
+        },
       );
     }
   }
@@ -1818,14 +1942,18 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     // Count total nodes that will be deleted
     int totalToDelete = 1 + _countDescendants(node);
 
-    if (node.isCouplerOutput) {
-      final parent = _findNode(root, node.parentId!);
-      if (parent != null) {
-        // Count total for both coupler outputs
-        int couplerTotal = 0;
+    final parent = _findNode(root, node.parentId!);
+    if (parent != null) {
+      if (node.isCouplerOutput || node.isSplitterOutput) {
+        // For both coupler and splitter outputs, delete all outputs at this level
+        int totalAtLevel = 0;
+        List<DiagramNode> nodesToDelete = [];
+
         for (var child in parent.children) {
-          if (child.isCouplerOutput) {
-            couplerTotal += 1 + _countDescendants(child);
+          if ((child.isCouplerOutput && node.isCouplerOutput) ||
+              (child.isSplitterOutput && node.isSplitterOutput)) {
+            totalAtLevel += 1 + _countDescendants(child);
+            nodesToDelete.add(child);
           }
         }
 
@@ -1834,10 +1962,15 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
           builder: (ctx) => AlertDialog(
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: const Text('Delete Coupler Outputs?',
-                style: TextStyle(fontWeight: FontWeight.bold)),
+            title: Text(
+              node.isCouplerOutput
+                  ? 'Delete Coupler Outputs?'
+                  : 'Delete Splitter Outputs?',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
             content: Text(
-                'This will delete BOTH coupler outputs and ALL $couplerTotal connected node(s).'),
+              'This will delete ALL ${node.isCouplerOutput ? 'coupler' : 'splitter'} outputs and ALL $totalAtLevel connected node(s).',
+            ),
             actions: [
               TextButton(
                   onPressed: () => Navigator.pop(ctx),
@@ -1851,23 +1984,27 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                           borderRadius: BorderRadius.circular(12))),
                   onPressed: () {
                     setState(() {
-                      // Remove ALL coupler outputs and their children
-                      parent.children
-                          .removeWhere((child) => child.isCouplerOutput);
-                      _recalculate(root!);
+                      // Remove all outputs at this level
+                      for (var nodeToDelete in nodesToDelete) {
+                        parent.children.remove(nodeToDelete);
+                      }
+                      _recalculateAll(root!);
                     });
                     Navigator.pop(ctx);
                   },
                   child: Text(
-                      'Delete All ($couplerTotal nodes)', // REMOVED CONST HERE
-                      style: const TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.bold)))
+                    'Delete All ($totalAtLevel nodes)',
+                    style: const TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.bold),
+                  ))
             ],
           ),
         );
         return;
       }
     }
+
+    // For regular nodes
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1893,7 +2030,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                   if (parent != null) {
                     // This automatically removes the node and ALL its children
                     parent.children.removeWhere((c) => c.id == node.id);
-                    _recalculate(root!);
+                    _recalculateAll(root!);
                   }
                 });
                 Navigator.pop(ctx);
@@ -2743,20 +2880,25 @@ class _DiagramPainter extends CustomPainter {
         _text(node.label, 14, Colors.white, fontWeight: FontWeight.bold);
     labelTp.paint(canvas, Offset(x - labelTp.width / 2, y - 22));
     if (node.isCouplerOutput || node.isSplitterOutput) {
-      final nodeSignalText = '${node.signal.toStringAsFixed(2)} dBm';
-      final sigTp = _text(nodeSignalText, 13, Colors.white.withOpacity(0.95),
-          fontWeight: FontWeight.bold);
+      // SHOW BOTH COUPLER AND WDM VALUES
+
+      // Line 1: Coupler/Splitter value (ALWAYS SHOW)
+      final mainLabel = node.isCouplerOutput ? 'Coupler' : 'Splitter';
+      final nodeSignalText =
+          '$mainLabel: ${node.signal.toStringAsFixed(1)} dBm';
+      final sigTp =
+          _text(nodeSignalText, 13, Colors.white, fontWeight: FontWeight.bold);
       sigTp.paint(canvas, Offset(x - sigTp.width / 2, y + 2));
 
-      // WDM Display - FIXED
+      // Line 2: WDM value (ONLY if WDM enabled)
       if (node.useWdm && node.wdmOutputPower != 0.0) {
-        final wdmText =
-            '${node.wdmOutputPower.toStringAsFixed(2)} dBm (PON 1310nm)';
-        final wdmTp = _text(wdmText, 11, Colors.amber.shade200,
-            fontWeight: FontWeight.w600);
-        wdmTp.paint(canvas, Offset(x - wdmTp.width / 2, y + 18));
+        final wdmText = 'WDM: ${node.wdmOutputPower.toStringAsFixed(1)} dBm';
+        final wdmTp = _text(wdmText, 12, Colors.amber.shade300,
+            fontWeight: FontWeight.bold);
+        wdmTp.paint(canvas, Offset(x - wdmTp.width / 2, y + 20));
       }
     } else {
+      // Rest of the code remains the same...
       if (node.deviceLoss != 0.0) {
         final lossText = '${node.deviceLoss.toStringAsFixed(2)} dB';
         final lossTp = _text(lossText, 12, Colors.white.withOpacity(0.95));
