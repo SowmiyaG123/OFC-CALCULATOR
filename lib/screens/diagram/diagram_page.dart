@@ -1252,8 +1252,8 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                           wavelength: parent.wavelength,
                           useWdm: parent.useWdm,
                           wdmLoss: parent.wdmLoss,
-                          wdmOutputPower: wdmOutput2 -
-                              0.5, // Right side reduction for WDM too
+                          wdmOutputPower:
+                              wdmOutput2, // Right side reduction for WDM too
                           couplerRatio: 100 - ratio,
                           isCouplerOutput: true,
                           deviceLoss: outputs[3], // loss2
@@ -1860,9 +1860,6 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
 
                               final output1Power = val1 + (inputPower - 1.0);
                               final output2Power = val2 + (inputPower - 1.0);
-                              final adjustedOutput2Power = output2Power - 0.5;
-
-                              // Calculate WDM outputs if enabled - USE WDMCalculator properly
                               double wdm1Power = 0.0;
                               double wdm2Power = 0.0;
 
@@ -1911,7 +1908,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                                 parent.children[1].signal =
                                     output2Power - fiberLoss; // CHANGED
                                 parent.children[1].deviceLoss =
-                                    inputPower - adjustedOutput2Power;
+                                    inputPower - output2Power;
                                 parent.children[1].deviceConfig =
                                     '$newRatio::1.0';
                                 parent.children[1].wdmOutputPower = wdm2Power;
@@ -2880,17 +2877,13 @@ class _DiagramPainter extends CustomPainter {
         _text(node.label, 14, Colors.white, fontWeight: FontWeight.bold);
     labelTp.paint(canvas, Offset(x - labelTp.width / 2, y - 22));
     if (node.isCouplerOutput || node.isSplitterOutput) {
-      // SHOW BOTH COUPLER AND WDM VALUES
-
-      // Line 1: Coupler/Splitter value (ALWAYS SHOW)
-      final mainLabel = node.isCouplerOutput ? 'Coupler' : 'Splitter';
-      final nodeSignalText =
-          '$mainLabel: ${node.signal.toStringAsFixed(1)} dBm';
+      // Line 1: ALWAYS show the main output value (Coupler/Splitter)
+      final nodeSignalText = '${node.signal.toStringAsFixed(1)} dBm';
       final sigTp =
-          _text(nodeSignalText, 13, Colors.white, fontWeight: FontWeight.bold);
+          _text(nodeSignalText, 14, Colors.white, fontWeight: FontWeight.bold);
       sigTp.paint(canvas, Offset(x - sigTp.width / 2, y + 2));
 
-      // Line 2: WDM value (ONLY if WDM enabled)
+      // Line 2: If WDM enabled, show WDM value BELOW
       if (node.useWdm && node.wdmOutputPower != 0.0) {
         final wdmText = 'WDM: ${node.wdmOutputPower.toStringAsFixed(1)} dBm';
         final wdmTp = _text(wdmText, 12, Colors.amber.shade300,
@@ -2989,3 +2982,5 @@ class _DiagramPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
+
+finally coupler value both blcoks are correct splitter also wdm problem edit no value change prob
