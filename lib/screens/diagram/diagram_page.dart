@@ -276,42 +276,191 @@ class OFCDiagramPage extends StatefulWidget {
 }
 
 class BlockPositionManager {
-  static const double blockWidth = 140.0; // Reduced to match new design
-  static const double blockHeight = 80.0; // Reduced to match new design
-  static const double minSpacing = 80.0; // Reduced for tighter layout
+  static const double blockWidth = 140.0;
+  static const double blockHeight = 120.0;
+  static const double minSpacing = 200.0; // Minimum horizontal spacing
+  static const double verticalSpacing =
+      290.0; // Vertical spacing between levels
 
   static double calculateOptimalSpacing(int siblingCount, int level) {
-    if (siblingCount <= 2) return 300.0; // Reduced
-    if (siblingCount <= 4) return 400.0; // Reduced
-    if (siblingCount <= 8) return 550.0; // Reduced
-    return 650.0; // Reduced
+    // Use a base spacing that scales with sibling count
+    double baseSpacing = 400.0; // Increased base spacing
+
+    // Increase spacing for more siblings
+    if (siblingCount > 2) {
+      baseSpacing = 400.0 + (siblingCount * 50.0);
+    }
+
+    // Add level-based scaling to prevent overlap in deep trees
+    if (level > 1) {
+      baseSpacing += (level * 30.0);
+    }
+
+    return baseSpacing;
   }
 
   static List<double> distributePositions(
       int count, double centerX, double spacing) {
+    if (count == 1) {
+      return [centerX];
+    }
+
     List<double> positions = [];
-    final total = (count - 1) * spacing;
-    final startX = centerX - total / 2;
+    final totalWidth = (count - 1) * spacing;
+    final startX = centerX - totalWidth / 2;
 
     for (int i = 0; i < count; i++) {
       positions.add(startX + i * spacing);
     }
 
-    return _resolveCollisions(positions, spacing);
+    return _resolveCollisions(positions, count, centerX);
   }
 
   static List<double> _resolveCollisions(
-      List<double> positions, double spacing) {
+      List<double> positions, int count, double centerX) {
+    if (positions.length <= 1) return positions;
+
+    bool hasCollision = true;
+    int iterations = 0;
+    const maxIterations = 50; // Increased iterations for better resolution
+
+    // Define required minimum space between blocks
+    const double requiredSpace = blockWidth + minSpacing;
+
+    while (hasCollision && iterations < maxIterations) {
+      hasCollision = false;
+
+      // Check for collisions between adjacent blocks
+      for (int i = 0; i < positions.length - 1; i++) {
+        double currentPos = positions[i];
+        double nextPos = positions[i + 1];
+        double actualSpace = nextPos - currentPos;
+
+        if (actualSpace < requiredSpace) {
+          hasCollision = true;
+          double overlap = requiredSpace - actualSpace;
+
+          // Distribute the overlap evenly to both sides
+          // Move left blocks left and right blocks right
+          for (int j = 0; j <= i; j++) {
+            positions[j] -= overlap / 2;
+          }
+          for (int j = i + 1; j < positions.length; j++) {
+            positions[j] += overlap / 2;
+          }
+        }
+      }
+
+      // Also check for symmetry - keep center balanced
+      if (positions.isNotEmpty) {
+        double currentCenter = (positions.first + positions.last) / 2;
+        double offset = centerX - currentCenter;
+
+        if (offset.abs() > 10) {
+          // Only adjust if significantly off-center
+          for (int i = 0; i < positions.length; i++) {
+            positions[i] += offset;
+          }
+        }
+      }
+
+      iterations++;
+    }
+
+    // Final pass: ensure minimum spacing and no collisions
+    return _finalizePositions(positions, requiredSpace, centerX);
+  }
+
+  static List<double> _finalizePositions(
+      List<double> positions, double requiredSpace, double centerX) {
+    if (positions.isEmpty) return positions;
+
+    // Sort positions to ensure they're in order
+    positions.sort();
+
+    // Force minimum spacing
     for (int i = 0; i < positions.length - 1; i++) {
-      double overlap =
-          (positions[i] + blockWidth + minSpacing) - positions[i + 1];
-      if (overlap > 0) {
+      double currentPos = positions[i];
+      double nextPos = positions[i + 1];
+
+      if (nextPos - currentPos < requiredSpace) {
+        double neededAdjustment = requiredSpace - (nextPos - currentPos);
+        // Push the next position to the right
         for (int j = i + 1; j < positions.length; j++) {
-          positions[j] += overlap;
+          positions[j] += neededAdjustment;
         }
       }
     }
+
+    // Re-center the positions around the original center
+    if (positions.isNotEmpty) {
+      double currentCenter = (positions.first + positions.last) / 2;
+      double offset = centerX - currentCenter;
+
+      for (int i = 0; i < positions.length; i++) {
+        positions[i] += offset;
+      }
+    }
+
     return positions;
+  }
+
+  // New method: Check if a position would cause collision with existing positions
+  static bool wouldCollide(double newX, List<double> existingPositions) {
+    for (double existingX in existingPositions) {
+      if ((newX - existingX).abs() < blockWidth + minSpacing) {
+        return true;
+      }
+    }
+    return false;
+  }
+// Replace the BlockPositionManager.findAvailablePosition method:
+
+  static double findAvailablePosition(
+      double desiredX, List<double> existingPositions) {
+    if (existingPositions.isEmpty) return desiredX;
+
+    // Sort existing positions
+    List<double> sorted = List.from(existingPositions)..sort();
+
+    const double requiredSpace = blockWidth + minSpacing;
+
+    // Try desired position first
+    bool canUseDesired = true;
+    for (double existingX in sorted) {
+      if ((desiredX - existingX).abs() < requiredSpace) {
+        canUseDesired = false;
+        break;
+      }
+    }
+
+    if (canUseDesired) return desiredX;
+
+    // Find gaps in existing positions
+    for (int i = 0; i < sorted.length - 1; i++) {
+      double gapStart = sorted[i] + requiredSpace;
+      double gapEnd = sorted[i + 1] - requiredSpace;
+
+      if (gapEnd - gapStart >= blockWidth) {
+        // Found a gap - use it if it's close to desired position
+        double gapCenter = (gapStart + gapEnd) / 2;
+        if ((gapCenter - desiredX).abs() < 500) {
+          return gapCenter;
+        }
+      }
+    }
+
+    // Try moving right with increased spacing
+    double rightPos = sorted.last + requiredSpace * 1.5;
+
+    // Try moving left with increased spacing
+    double leftPos = sorted.first - requiredSpace * 1.5;
+
+    // Choose the closest available position
+    double rightDistance = (rightPos - desiredX).abs();
+    double leftDistance = (leftPos - desiredX).abs();
+
+    return rightDistance < leftDistance ? rightPos : leftPos;
   }
 }
 
@@ -3366,7 +3515,7 @@ class DiagramWidget extends StatelessWidget {
       for (int i = 0; i < count; i++) {
         final child = node.children[i];
         final childX = positions[i];
-        final childY = y + 250;
+        final childY = y + 290;
         widgets.addAll(_overlay(child, childX, childY, level: level + 1));
       }
     }
@@ -3380,47 +3529,74 @@ class _DiagramPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) => _draw(canvas, root, 3000, 100);
-// Update line colors to match new theme
-  void _draw(Canvas canvas, DiagramNode node, double x, double y) {
+// Replace the _draw method in _DiagramPainter class:
+
+  void _draw(Canvas canvas, DiagramNode node, double x, double y,
+      {int level = 0}) {
     if (node.children.isNotEmpty) {
       final count = node.children.length;
-      final spacing = BlockPositionManager.calculateOptimalSpacing(count, 0);
-      final positions =
+      final spacing =
+          BlockPositionManager.calculateOptimalSpacing(count, level);
+
+      // Calculate initial positions
+      List<double> positions =
           BlockPositionManager.distributePositions(count, x, spacing);
 
-      final paintLine = Paint()
-        ..color = Color(0xFF424242) // Professional gray
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.5;
+      // CRITICAL FIX: Track ALL positions at this level globally
+      // This prevents overlaps when multiple parents have children at same level
+      Map<int, List<double>> levelPositions = {};
+
+      // Collect all existing positions at the child level
+      _collectPositionsAtLevel(
+          node, y + BlockPositionManager.verticalSpacing, levelPositions);
+
+      // Adjust positions to avoid collisions with ALL blocks at this level
+      for (int i = 0; i < count; i++) {
+        double desiredX = positions[i];
+        List<double> existingAtLevel = levelPositions[level + 1] ?? [];
+
+        // Find available position considering ALL blocks at this level
+        positions[i] = BlockPositionManager.findAvailablePosition(
+            desiredX, existingAtLevel);
+
+        // Add this position to the level tracker
+        if (levelPositions[level + 1] == null) {
+          levelPositions[level + 1] = [];
+        }
+        levelPositions[level + 1]!.add(positions[i]);
+      }
 
       for (int i = 0; i < count; i++) {
-        final child = node.children[i];
-        final childX = positions[i];
-        final childY = y + 250;
+        DiagramNode child = node.children[i];
+        double childX = positions[i];
+        final childY = y + BlockPositionManager.verticalSpacing;
 
-        canvas.drawLine(Offset(x, y + 45), Offset(x, y + 150), paintLine);
-        canvas.drawLine(Offset(x, y + 150), Offset(childX, y + 150), paintLine);
+        // Draw connecting lines
+        final paintLine = Paint()
+          ..color = const Color(0xFF424242)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.5;
+
+        canvas.drawLine(Offset(x, y + 45), Offset(x, y + 165), paintLine);
+        canvas.drawLine(Offset(x, y + 165), Offset(childX, y + 165), paintLine);
         canvas.drawLine(
-            Offset(childX, y + 150), Offset(childX, childY - 45), paintLine);
+            Offset(childX, y + 165), Offset(childX, childY - 55), paintLine);
 
+        // Draw distance label if applicable
         if (child.distance > 0) {
-          String distanceText;
-          if (child.distance < 1.0) {
-            distanceText = '${(child.distance * 1000).toStringAsFixed(0)}m';
-          } else {
-            distanceText = '${child.distance.toStringAsFixed(2)}km';
-          }
+          String distanceText = child.distance < 1.0
+              ? '${(child.distance * 1000).toStringAsFixed(0)}m'
+              : '${child.distance.toStringAsFixed(2)}km';
 
           final distanceTp = _text(distanceText, 10, Colors.white,
               fontWeight: FontWeight.bold);
           final bgRect = Rect.fromCenter(
-              center: Offset(childX, y + 150),
+              center: Offset(childX, y + 165),
               width: distanceTp.width + 16,
               height: 20);
 
-          // Professional gradient background
           final gradient = LinearGradient(
-            colors: [Color(0xFF1976D2), Color(0xFF0D47A1)],
+            colors: [const Color(0xFF1976D2), const Color(0xFF0D47A1)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           );
@@ -3432,11 +3608,15 @@ class _DiagramPainter extends CustomPainter {
           distanceTp.paint(
               canvas,
               Offset(childX - distanceTp.width / 2,
-                  y + 150 - distanceTp.height / 2));
+                  y + 165 - distanceTp.height / 2));
         }
-        _draw(canvas, child, childX, childY);
+
+        // Recursively draw child with level tracking
+        _draw(canvas, child, childX, childY, level: level + 1);
       }
     }
+
+    // Draw the current node block
     if (node.isHeadend) {
       _drawHeadendBlock(canvas, x, y, node);
     } else if (node.isCouplerOutput) {
@@ -3447,8 +3627,31 @@ class _DiagramPainter extends CustomPainter {
       _drawStandardBlock(canvas, x, y, node);
     }
 
+    // Draw house icon for leaf nodes
     if (node.isLeaf && !node.isHeadend) {
       _drawHouseIcon(canvas, Offset(x, y + 100), node);
+    }
+  }
+
+// Add this helper method to collect all positions at a specific level
+  void _collectPositionsAtLevel(
+      DiagramNode node, double targetY, Map<int, List<double>> levelPositions,
+      {double currentY = 100, int level = 0}) {
+    // This is a separate tree traversal that builds a map of all X positions at each Y level
+    // This prevents blocks from different parents from overlapping
+
+    if (node.children.isNotEmpty) {
+      for (var child in node.children) {
+        double childY = currentY + BlockPositionManager.verticalSpacing;
+
+        // Store this child's future position
+        if (levelPositions[level + 1] == null) {
+          levelPositions[level + 1] = [];
+        }
+
+        _collectPositionsAtLevel(child, targetY, levelPositions,
+            currentY: childY, level: level + 1);
+      }
     }
   }
 
@@ -3529,7 +3732,9 @@ class _DiagramPainter extends CustomPainter {
 
   void _drawCouplerBlock(Canvas canvas, double x, double y, DiagramNode node) {
     final blockWidth = 120.0;
-    final blockHeight = 90.0; // Increased height to fit all info
+    final blockHeight = node.useWdm && node.wdmOutputPower != 0.0
+        ? 105.0
+        : 90.0; // Dynamic height
     final headerHeight = 22.0;
 
     // Shadow
@@ -3587,6 +3792,12 @@ class _DiagramPainter extends CustomPainter {
           ..strokeWidth = 2.0);
 
     // HEADER: Display user-entered label (e.g., "abc1")
+
+    // BODY CONTENT: Display in order - Ratio, Input dBm, WDM Power, Final Power
+    double contentY = y - 22; // Start higher to fit 4 lines
+
+    // BODY CONTENT: Display in order - Ratio, Input dBm, Final Power
+
     final label = node.label.isEmpty ? 'Coupler' : node.label;
     final nameTp = _text(label, 10, Colors.white, fontWeight: FontWeight.bold);
 
@@ -3603,32 +3814,36 @@ class _DiagramPainter extends CustomPainter {
           Offset(x - nameTp.width / 2,
               y - blockHeight / 2 + headerHeight / 2 - nameTp.height / 2));
     }
-
-    // BODY CONTENT: Display in order - Ratio, Input dBm, Final Power
-    double contentY = y - 18;
-
-    // 1. Ratio (e.g., "30")
+// 1. Ratio (e.g., "30")
     final sideRatio = node.couplerRatio ?? 50;
     final ratioTp = _text('$sideRatio', 13, const Color(0xFFEF6C00),
         fontWeight: FontWeight.bold);
     ratioTp.paint(canvas, Offset(x - ratioTp.width / 2, contentY));
 
-    contentY += 18;
+    contentY += 16;
 
-    // 2. Input Power (parent's signal before losses)
-    // This needs to be calculated from parent
+// 2. Input Power (parent's signal before losses)
     final inputPowerText =
         'In: ${_getParentPower(node).toStringAsFixed(1)} dBm';
     final inputTp =
-        _text(inputPowerText, 9, Colors.black54, fontWeight: FontWeight.w500);
+        _text(inputPowerText, 8, Colors.black54, fontWeight: FontWeight.w500);
     inputTp.paint(canvas, Offset(x - inputTp.width / 2, contentY));
 
-    contentY += 16;
+    contentY += 14;
 
-    // 3. Final Output Power
+// 3. WDM Power (if enabled)
+    if (node.useWdm && node.wdmOutputPower != 0.0) {
+      final wdmText = 'WDM: ${node.wdmOutputPower.toStringAsFixed(1)} dBm';
+      final wdmTp = _text(wdmText, 8, Colors.orange.shade700,
+          fontWeight: FontWeight.w600);
+      wdmTp.paint(canvas, Offset(x - wdmTp.width / 2, contentY));
+      contentY += 14;
+    }
+
+// 4. Final Output Power
     final finalPower = node.signal;
-    final powerTp = _text(
-        '${finalPower.toStringAsFixed(1)} dBm', 11, const Color(0xFF4CAF50),
+    final powerTp = _text('${finalPower.toStringAsFixed(1)} dBm', 11,
+        const Color.fromARGB(255, 99, 114, 243),
         fontWeight: FontWeight.bold);
     powerTp.paint(canvas, Offset(x - powerTp.width / 2, contentY));
   }
@@ -3711,6 +3926,8 @@ class _DiagramPainter extends CustomPainter {
           ..style = PaintingStyle.stroke
           ..strokeWidth = 2.0);
 
+    // BODY: Display in order - Split Ratio, Input dBm, Final Power
+    double contentY = y - 18;
     // HEADER: Display user-entered label
     final displayName = node.label.isEmpty ? 'Splitter' : node.label;
     final nameTp =
@@ -3729,9 +3946,6 @@ class _DiagramPainter extends CustomPainter {
           Offset(x - nameTp.width / 2,
               y - blockHeight / 2 + headerHeight / 2 - nameTp.height / 2));
     }
-
-    // BODY: Display in order - Split Ratio, Input dBm, Final Power
-    double contentY = y - 18;
 
     // 1. Split ratio (e.g., "1x2")
     String splitInfo = '1x?';
@@ -3759,8 +3973,8 @@ class _DiagramPainter extends CustomPainter {
 
     // 3. Final Output Power
     final finalPower = node.signal;
-    final powerTp = _text(
-        '${finalPower.toStringAsFixed(1)} dBm', 11, const Color(0xFF4CAF50),
+    final powerTp = _text('${finalPower.toStringAsFixed(1)} dBm', 11,
+        const ui.Color.fromARGB(255, 96, 116, 229),
         fontWeight: FontWeight.bold);
     powerTp.paint(canvas, Offset(x - powerTp.width / 2, contentY));
   }
@@ -3843,109 +4057,152 @@ class _DiagramPainter extends CustomPainter {
   void _drawHouseIcon(Canvas canvas, Offset center, DiagramNode node) {
     final c = center;
 
-    // [Keep all existing house drawing code until the end, then add:]
-
-    // Display endpoint data
-
-    // Shadow
-    final shadowRect =
-        Rect.fromCenter(center: Offset(c.dx, c.dy + 12), width: 36, height: 8);
-    canvas.drawOval(shadowRect, Paint()..color = const Color(0x22000000));
-
-    // House body
-    final bodyRect = RRect.fromRectAndRadius(
-      Rect.fromCenter(center: c, width: 40, height: 28),
-      const Radius.circular(4),
-    );
-    canvas.drawRRect(bodyRect, Paint()..color = Colors.white);
-    canvas.drawRRect(
-        bodyRect,
-        Paint()
-          ..color = Colors.red.shade300
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.5);
-
-    // Roof
-    final roofPath = Path()
-      ..moveTo(c.dx, c.dy - 24)
-      ..lineTo(c.dx - 26, c.dy - 8)
-      ..lineTo(c.dx + 26, c.dy - 8)
-      ..close();
-    canvas.drawPath(roofPath, Paint()..color = Colors.red.shade700);
-
-    // Chimney
-    final chimneyRect = RRect.fromRectAndRadius(
+    /* ---------- Soft Shadow ---------- */
+    canvas.drawOval(
       Rect.fromCenter(
-          center: Offset(c.dx + 10, c.dy - 20), width: 6, height: 12),
-      const Radius.circular(1.5),
+        center: Offset(c.dx, c.dy + 22),
+        width: 42,
+        height: 8,
+      ),
+      Paint()
+        ..color = Colors.black.withOpacity(0.12)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
     );
-    canvas.drawRRect(chimneyRect, Paint()..color = Colors.red.shade900);
 
-    // Circular attic window
-    canvas.drawCircle(
-        Offset(c.dx, c.dy - 14), 4, Paint()..color = Colors.white);
-    canvas.drawCircle(
-        Offset(c.dx, c.dy - 14),
-        4,
-        Paint()
-          ..color = Colors.red.shade400
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.2);
+    /* ---------- House Body ---------- */
+    final bodyRect = RRect.fromRectAndRadius(
+      Rect.fromCenter(center: c, width: 44, height: 30),
+      const Radius.circular(6),
+    );
 
-    // Windows
-    final windowPaint = Paint()..color = Colors.white;
-    final framePaint = Paint()
-      ..color = Colors.red.shade400
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2;
+    canvas.drawRRect(
+      bodyRect,
+      Paint()..color = const Color(0xFFF7F6F2), // soft ivory
+    );
 
-    // Left window
-    final winL = Rect.fromCenter(
-        center: Offset(c.dx - 12, c.dy - 2), width: 8, height: 8);
-    canvas.drawRect(winL, windowPaint);
-    canvas.drawRect(winL, framePaint);
+    canvas.drawRRect(
+      bodyRect,
+      Paint()
+        ..color = Colors.grey.shade300
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
 
-    // Right window
-    final winR = Rect.fromCenter(
-        center: Offset(c.dx + 12, c.dy - 2), width: 8, height: 8);
-    canvas.drawRect(winR, windowPaint);
-    canvas.drawRect(winR, framePaint);
+    /* ---------- Roof (Modern) ---------- */
+    final roofPath = Path()
+      ..moveTo(c.dx, c.dy - 28)
+      ..lineTo(c.dx - 26, c.dy - 6)
+      ..lineTo(c.dx + 26, c.dy - 6)
+      ..close();
 
-    // Center window above door
-    final winC =
-        Rect.fromCenter(center: Offset(c.dx, c.dy - 2), width: 8, height: 8);
-    canvas.drawRect(winC, windowPaint);
-    canvas.drawRect(winC, framePaint);
+    canvas.drawPath(
+      roofPath,
+      Paint()..color = const Color(0xFF607D8B), // slate blue
+    );
 
-    // Door
+    /* ---------- Door ---------- */
     final doorRect = RRect.fromRectAndRadius(
-      Rect.fromCenter(center: Offset(c.dx, c.dy + 8), width: 10, height: 14),
-      const Radius.circular(2),
+      Rect.fromCenter(
+        center: Offset(c.dx, c.dy + 8),
+        width: 10,
+        height: 16,
+      ),
+      const Radius.circular(3),
     );
-    canvas.drawRRect(doorRect, Paint()..color = const Color(0xFF8D6E63));
-    canvas.drawCircle(
-        Offset(c.dx + 3, c.dy + 8), 1.2, Paint()..color = Colors.amber);
 
-    double textY = c.dy + 30;
-    if (node.endpointName != null && node.endpointName!.isNotEmpty) {
-      final nameTp = _text(node.endpointName!, 11, const Color(0xFF1A237E),
-          fontWeight: FontWeight.bold);
-      final rect = Rect.fromCenter(
-          center: Offset(c.dx, textY), width: nameTp.width + 16, height: 20);
-      canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(10)),
-          Paint()..color = Colors.blue.shade50);
-      nameTp.paint(canvas, Offset(c.dx - nameTp.width / 2, textY - 10));
-      textY += 26;
+    canvas.drawRRect(
+      doorRect,
+      Paint()..color = const Color(0xFFB08968), // warm wood
+    );
+
+    canvas.drawCircle(
+      Offset(c.dx + 3, c.dy + 8),
+      1.2,
+      Paint()..color = Colors.white70,
+    );
+
+    /* ---------- Windows (Glass look) ---------- */
+    Paint windowPaint = Paint()
+      ..color = const Color(0xFFB3E5FC); // soft glass blue
+
+    void window(Offset pos) {
+      final rect = RRect.fromRectAndRadius(
+        Rect.fromCenter(center: pos, width: 8, height: 8),
+        const Radius.circular(2),
+      );
+      canvas.drawRRect(rect, windowPaint);
     }
 
+    window(Offset(c.dx - 12, c.dy - 2));
+    window(Offset(c.dx + 12, c.dy - 2));
+
+    /* ---------- Minimal Attic Dot ---------- */
+    canvas.drawCircle(
+      Offset(c.dx, c.dy - 14),
+      2.5,
+      Paint()..color = Colors.grey.shade400,
+    );
+/* ---------- Text with Power Display ---------- */
+    double textY = c.dy + 34;
+
+// Display endpoint name
+    if (node.endpointName != null && node.endpointName!.isNotEmpty) {
+      final nameTp = _text(
+        node.endpointName!,
+        11,
+        const Color(0xFF263238),
+        fontWeight: FontWeight.w600,
+      );
+
+      nameTp.paint(
+        canvas,
+        Offset(c.dx - nameTp.width / 2, textY),
+      );
+
+      textY += 18;
+    }
+
+// Display power value (ALWAYS show for endpoints)
+    final powerText = '${node.signal.toStringAsFixed(1)} dBm';
+    final powerTp = _text(
+      powerText,
+      10,
+      const Color(0xFF1976D2), // Blue color for power
+      fontWeight: FontWeight.bold,
+    );
+
+// Background for power
+    final powerBgRect = Rect.fromCenter(
+      center: Offset(c.dx, textY + 9),
+      width: powerTp.width + 16,
+      height: 18,
+    );
+
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(powerBgRect, const Radius.circular(9)),
+      Paint()..color = Colors.blue.shade50,
+    );
+
+    powerTp.paint(
+      canvas,
+      Offset(c.dx - powerTp.width / 2, textY),
+    );
+
+    textY += 20;
+
+// Display description
     if (node.endpointDescription != null &&
         node.endpointDescription!.isNotEmpty) {
-      final descTp = _text(node.endpointDescription!, 9, Colors.black87);
-      final rect = Rect.fromCenter(
-          center: Offset(c.dx, textY), width: descTp.width + 12, height: 18);
-      canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(8)),
-          Paint()..color = Colors.grey.shade100);
-      descTp.paint(canvas, Offset(c.dx - descTp.width / 2, textY - 9));
+      final descTp = _text(
+        node.endpointDescription!,
+        9,
+        Colors.grey.shade700,
+      );
+
+      descTp.paint(
+        canvas,
+        Offset(c.dx - descTp.width / 2, textY),
+      );
     }
   }
 
