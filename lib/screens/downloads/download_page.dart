@@ -2,7 +2,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import 'package:share_plus/share_plus.dart'; // Add this to pubspec.yaml
+import 'package:share_plus/share_plus.dart';
 import '../diagram/diagram_page.dart';
 
 class DownloadsPage extends StatefulWidget {
@@ -26,11 +26,22 @@ class _DownloadsPageState extends State<DownloadsPage> {
   }
 
   void _reEditDiagram(Map data) {
+    // ✅ Ensure WDM data is properly passed
+    final enhancedData = {
+      ...data,
+      // Ensure these fields exist
+      'useWdm': data['useWdm'] ?? false,
+      'wdmPower': data['wdmPower'] ?? 0.0,
+      'wdmLoss': data['wdmLoss'] ?? 0.0,
+    };
+
+    print(
+        '📋 Re-editing with WDM: ${enhancedData['useWdm']}, Power: ${enhancedData['wdmPower']}');
+
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => OFCDiagramPage(
-            savedData: data), // Change _OFCDiagramPage to OFCDiagramPage
+        builder: (_) => OFCDiagramPage(savedData: enhancedData),
       ),
     );
   }
@@ -47,15 +58,16 @@ class _DownloadsPageState extends State<DownloadsPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Row(
-          children: [
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Row(
+          children: const [
             Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 28),
             SizedBox(width: 12),
-            Text('Delete Diagram?', style: TextStyle(fontSize: 18)),
+            Text('Delete diagram?', style: TextStyle(fontSize: 18)),
           ],
         ),
         content: const Text('This action cannot be undone.'),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -66,8 +78,9 @@ class _DownloadsPageState extends State<DownloadsPage> {
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red,
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(10),
               ),
+              elevation: 0,
             ),
             child: const Text('Delete'),
           ),
@@ -111,7 +124,23 @@ class _DownloadsPageState extends State<DownloadsPage> {
   }
 
   void _showFullImage(
-      BuildContext context, String? localPath, String? cloudUrl) {
+    BuildContext context,
+    String? localPath,
+    String? cloudUrl,
+  ) {
+    // Get thumbnail from the saved data
+    final box = Hive.box('diagram_downloads');
+    String? thumbnailPath;
+
+    for (var item in box.values) {
+      final data = item as Map;
+      if ((data['path'] == localPath || data['cloudUrl'] == cloudUrl) &&
+          data['thumbnailPath'] != null) {
+        thumbnailPath = data['thumbnailPath'];
+        break;
+      }
+    }
+
     showDialog(
       context: context,
       builder: (ctx) => Dialog(
@@ -122,64 +151,42 @@ class _DownloadsPageState extends State<DownloadsPage> {
             Container(
               decoration: BoxDecoration(
                 color: Colors.black,
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(16),
               ),
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(16),
                 child: InteractiveViewer(
                   minScale: 0.5,
                   maxScale: 4.0,
-                  child: (localPath != null && !kIsWeb)
+                  child: thumbnailPath != null &&
+                          !kIsWeb &&
+                          File(thumbnailPath).existsSync()
                       ? Image.file(
-                          File(localPath),
+                          File(thumbnailPath),
                           fit: BoxFit.contain,
                           errorBuilder: (context, error, stack) {
-                            return const Center(
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(Icons.broken_image,
-                                      size: 60, color: Colors.white),
-                                  SizedBox(height: 10),
-                                  Text('Image not found',
-                                      style: TextStyle(color: Colors.white)),
-                                ],
-                              ),
+                            return const _DialogPlaceholder(
+                              icon: Icons.broken_image,
+                              text: 'Image not found',
                             );
                           },
                         )
-                      : (cloudUrl != null)
+                      : cloudUrl != null
                           ? Image.network(
                               cloudUrl,
                               fit: BoxFit.contain,
                               loadingBuilder:
                                   (context, child, loadingProgress) {
                                 if (loadingProgress == null) return child;
-                                return Center(
+                                return const Center(
                                   child: CircularProgressIndicator(
-                                    value: loadingProgress.expectedTotalBytes !=
-                                            null
-                                        ? loadingProgress
-                                                .cumulativeBytesLoaded /
-                                            loadingProgress.expectedTotalBytes!
-                                        : null,
-                                    color: Colors.white,
-                                  ),
+                                      color: Colors.white),
                                 );
                               },
                               errorBuilder: (context, error, stack) {
-                                return const Center(
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(Icons.cloud_off,
-                                          size: 60, color: Colors.white),
-                                      SizedBox(height: 10),
-                                      Text('Failed to load',
-                                          style:
-                                              TextStyle(color: Colors.white)),
-                                    ],
-                                  ),
+                                return const _DialogPlaceholder(
+                                  icon: Icons.cloud_off,
+                                  text: 'Failed to load',
                                 );
                               },
                             )
@@ -196,9 +203,12 @@ class _DownloadsPageState extends State<DownloadsPage> {
             Positioned(
               top: 10,
               right: 10,
-              child: IconButton(
-                icon: const Icon(Icons.close, color: Colors.white, size: 30),
-                onPressed: () => Navigator.pop(ctx),
+              child: CircleAvatar(
+                backgroundColor: Colors.black.withOpacity(0.6),
+                child: IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white),
+                  onPressed: () => Navigator.pop(ctx),
+                ),
               ),
             ),
           ],
@@ -207,17 +217,63 @@ class _DownloadsPageState extends State<DownloadsPage> {
     );
   }
 
+  Widget _buildFallbackPreview(String? cloudUrl) {
+    if (cloudUrl != null) {
+      return Image.network(
+        cloudUrl,
+        fit: BoxFit.contain,
+        loadingBuilder: (context, child, loadingProgress) {
+          if (loadingProgress == null) return child;
+          return const Center(
+            child: CircularProgressIndicator(color: Colors.white),
+          );
+        },
+        errorBuilder: (context, error, stack) {
+          return const _DialogPlaceholder(
+            icon: Icons.cloud_off,
+            text: 'Failed to load image',
+          );
+        },
+      );
+    }
+
+    return const _DialogPlaceholder(
+      icon: Icons.image_not_supported,
+      text: 'Preview not available',
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
     return Scaffold(
-      backgroundColor: Colors.grey[50],
+      backgroundColor:
+          isDark ? const Color(0xFF0F172A) : const Color(0xFFF5F7FB),
       appBar: AppBar(
-        title: const Text(
-          'Downloaded Diagrams',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-        backgroundColor: const Color(0xFF1A237E),
         elevation: 0,
+        backgroundColor: isDark ? const Color(0xFF020617) : Colors.white,
+        foregroundColor: isDark ? Colors.white : const Color(0xFF111827),
+        centerTitle: false,
+        titleSpacing: 16,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Downloads',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 20),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'Saved OFC diagrams',
+              style: TextStyle(
+                fontSize: 12,
+                color: isDark ? Colors.grey[400] : Colors.grey[600],
+              ),
+            ),
+          ],
+        ),
       ),
       body: FutureBuilder<Box>(
         future: _boxFuture,
@@ -227,24 +283,9 @@ class _DownloadsPageState extends State<DownloadsPage> {
           }
 
           if (snapshot.hasError) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.error_outline, size: 60, color: Colors.red),
-                  const SizedBox(height: 16),
-                  Text('Error: ${snapshot.error}'),
-                  const SizedBox(height: 16),
-                  ElevatedButton(
-                    onPressed: () {
-                      setState(() {
-                        _initBox();
-                      });
-                    },
-                    child: const Text('Retry'),
-                  ),
-                ],
-              ),
+            return _ErrorSection(
+              error: snapshot.error.toString(),
+              onRetry: () => setState(_initBox),
             );
           }
 
@@ -254,29 +295,7 @@ class _DownloadsPageState extends State<DownloadsPage> {
             valueListenable: box.listenable(),
             builder: (context, Box box, _) {
               if (box.isEmpty) {
-                return Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.image_not_supported_outlined,
-                          size: 100, color: Colors.grey[400]),
-                      const SizedBox(height: 20),
-                      Text(
-                        'No diagrams saved yet',
-                        style: TextStyle(
-                          fontSize: 20,
-                          color: Colors.grey[600],
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        'Create and save diagrams to see them here',
-                        style: TextStyle(fontSize: 14, color: Colors.grey[500]),
-                      ),
-                    ],
-                  ),
-                );
+                return _EmptyDownloads(isDark: isDark);
               }
 
               final items = box.values.toList().reversed.toList();
@@ -288,227 +307,422 @@ class _DownloadsPageState extends State<DownloadsPage> {
                   crossAxisCount: 2,
                   crossAxisSpacing: 16,
                   mainAxisSpacing: 16,
-                  childAspectRatio: 0.75,
+                  childAspectRatio: 0.78,
                 ),
                 itemBuilder: (context, index) {
                   final data = items[index] as Map;
                   final String? localPath = data['path'];
+                  final String? thumbnailPath =
+                      data['thumbnailPath']; // ✅ ADD THIS
                   final String? cloudUrl = data['cloudUrl'];
                   final String dateStr = data['date'] ?? '';
                   final String name = data['name'] ?? 'Diagram';
 
-                  DateTime? date;
+                  DateTime date;
                   try {
                     date = DateTime.parse(dateStr);
-                  } catch (e) {
+                  } catch (_) {
                     date = DateTime.now();
                   }
 
-                  return Card(
-                    elevation: 4,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: InkWell(
-                      onTap: () => _showFullImage(context, localPath, cloudUrl),
-                      borderRadius: BorderRadius.circular(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Expanded(
-                            child: ClipRRect(
-                              borderRadius: const BorderRadius.vertical(
-                                top: Radius.circular(12),
-                              ),
-                              child: (localPath != null && !kIsWeb)
-                                  ? Image.file(
-                                      File(localPath),
-                                      fit: BoxFit.cover,
-                                      errorBuilder: (context, error, stack) {
-                                        return Container(
-                                          color: Colors.grey[200],
-                                          child: const Center(
-                                            child: Icon(Icons.broken_image,
-                                                size: 50, color: Colors.grey),
-                                          ),
-                                        );
-                                      },
-                                    )
-                                  : (cloudUrl != null)
-                                      ? Image.network(
-                                          cloudUrl,
-                                          fit: BoxFit.cover,
-                                          loadingBuilder: (context, child,
-                                              loadingProgress) {
-                                            if (loadingProgress == null) {
-                                              return child;
-                                            }
-                                            return Container(
-                                              color: Colors.grey[200],
-                                              child: const Center(
-                                                child:
-                                                    CircularProgressIndicator(),
-                                              ),
-                                            );
-                                          },
-                                          errorBuilder:
-                                              (context, error, stack) {
-                                            return Container(
-                                              color: Colors.grey[200],
-                                              child: const Center(
-                                                child: Icon(Icons.cloud_off,
-                                                    size: 50,
-                                                    color: Colors.grey),
-                                              ),
-                                            );
-                                          },
-                                        )
-                                      : Container(
-                                          color: Colors.grey[200],
-                                          child: const Center(
-                                            child: Icon(
-                                                Icons.image_not_supported,
-                                                size: 50,
-                                                color: Colors.grey),
-                                          ),
-                                        ),
-                            ),
-                          ),
-                          Container(
-                            padding: const EdgeInsets.all(10),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  name.length > 20
-                                      ? '${name.substring(0, 20)}...'
-                                      : name,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 13,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                const SizedBox(height: 4),
-                                Row(
-                                  children: [
-                                    Icon(Icons.access_time,
-                                        size: 12, color: Colors.grey[600]),
-                                    const SizedBox(width: 4),
-                                    Expanded(
-                                      child: Text(
-                                        '${date.day}/${date.month}/${date.year} ${date.hour}:${date.minute.toString().padLeft(2, '0')}',
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          color: Colors.grey[600],
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 6),
-                                Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    if (cloudUrl != null)
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 6,
-                                          vertical: 2,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: Colors.green[50],
-                                          borderRadius:
-                                              BorderRadius.circular(4),
-                                        ),
-                                        child: Row(
-                                          children: [
-                                            Icon(Icons.cloud_done,
-                                                size: 12,
-                                                color: Colors.green[700]),
-                                            const SizedBox(width: 3),
-                                            Text(
-                                              'Cloud',
-                                              style: TextStyle(
-                                                fontSize: 10,
-                                                color: Colors.green[700],
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    const Spacer(),
-                                    PopupMenuButton(
-                                      icon:
-                                          const Icon(Icons.more_vert, size: 18),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      itemBuilder: (context) => [
-                                        const PopupMenuItem(
-                                          value: 're-edit',
-                                          child: Row(
-                                            children: [
-                                              Icon(Icons.edit,
-                                                  size: 18, color: Colors.blue),
-                                              SizedBox(width: 10),
-                                              Text('Re-edit'),
-                                            ],
-                                          ),
-                                        ),
-                                        const PopupMenuItem(
-                                          value: 'share',
-                                          child: Row(
-                                            children: [
-                                              Icon(Icons.share, size: 18),
-                                              SizedBox(width: 10),
-                                              Text('Share'),
-                                            ],
-                                          ),
-                                        ),
-                                        const PopupMenuItem(
-                                          value: 'delete',
-                                          child: Row(
-                                            children: [
-                                              Icon(Icons.delete,
-                                                  size: 18, color: Colors.red),
-                                              SizedBox(width: 10),
-                                              Text('Delete',
-                                                  style: TextStyle(
-                                                      color: Colors.red)),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                      onSelected: (value) async {
-                                        if (value == 'delete') {
-                                          final actualIndex =
-                                              box.length - 1 - index;
-                                          await _deleteItem(box, actualIndex);
-                                        } else if (value == 'share') {
-                                          _shareImage(localPath, cloudUrl);
-                                        } else if (value == 're-edit') {
-                                          _reEditDiagram(data);
-                                        }
-                                      },
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+                  final actualIndex = box.length - 1 - index;
+
+                  return _DiagramCard(
+                    name: name,
+                    date: date,
+                    localPath: localPath,
+                    thumbnailPath: thumbnailPath, // ✅ PASS IT HERE
+                    cloudUrl: cloudUrl,
+                    isDark: isDark,
+                    onTapPreview: () =>
+                        _showFullImage(context, localPath, cloudUrl),
+                    onShare: () => _shareImage(localPath, cloudUrl),
+                    onReEdit: () => _reEditDiagram(data),
+                    onDelete: () => _deleteItem(box, actualIndex),
                   );
                 },
               );
             },
           );
         },
+      ),
+    );
+  }
+}
+
+class _DiagramCard extends StatelessWidget {
+  final String name;
+  final DateTime date;
+  final String? localPath;
+  final String? thumbnailPath; // ✅ ADD THIS
+  final String? cloudUrl;
+  final bool isDark;
+  final VoidCallback onTapPreview;
+  final VoidCallback onShare;
+  final VoidCallback onReEdit;
+  final VoidCallback onDelete;
+
+  const _DiagramCard({
+    Key? key,
+    required this.name,
+    required this.date,
+    required this.localPath,
+    this.thumbnailPath, // ✅ ADD THIS
+    required this.cloudUrl,
+    required this.isDark,
+    required this.onTapPreview,
+    required this.onShare,
+    required this.onReEdit,
+    required this.onDelete,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final baseCardColor = isDark ? const Color(0xFF020617) : Colors.white;
+
+    return Material(
+      color: baseCardColor,
+      elevation: 3,
+      shadowColor: Colors.black.withOpacity(0.08),
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTapPreview,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // thumbnail
+            Expanded(
+              child: ClipRRect(
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(16)),
+                child: _buildThumbnail(context),
+              ),
+            ),
+            // details
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name.length > 22 ? '${name.substring(0, 22)}…' : name,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                      color: isDark ? Colors.white : const Color(0xFF111827),
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Icon(Icons.access_time,
+                          size: 12,
+                          color: isDark ? Colors.grey[400] : Colors.grey[600]),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: isDark ? Colors.grey[400] : Colors.grey[600],
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      if (cloudUrl != null)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? Colors.green.withOpacity(0.15)
+                                : Colors.green[50],
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.cloud_done,
+                                  size: 12, color: Colors.green[700]),
+                              const SizedBox(width: 3),
+                              Text(
+                                'Synced',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: Colors.green[700],
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      const Spacer(),
+                      // share icon removed, inline actions instead
+                      TextButton.icon(
+                        onPressed: onReEdit,
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        icon: Icon(Icons.edit,
+                            size: 16,
+                            color:
+                                isDark ? Colors.blue[300] : Colors.blue[700]),
+                        label: Text(
+                          'Re-edit',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isDark ? Colors.blue[300] : Colors.blue[700],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      TextButton.icon(
+                        onPressed: onDelete,
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        icon: Icon(Icons.delete,
+                            size: 16,
+                            color: isDark ? Colors.red[300] : Colors.red),
+                        label: Text(
+                          'Delete',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isDark ? Colors.red[300] : Colors.red,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildThumbnail(BuildContext context) {
+    final placeholder = Container(
+      color: isDark ? const Color(0xFF1F2937) : const Color(0xFFE5E7EB),
+      child: Icon(
+        Icons.image_outlined,
+        size: 40,
+        color: isDark ? Colors.grey[400] : Colors.grey[500],
+      ),
+    );
+
+    // ✅ Use thumbnailPath from card properties (already passed from constructor)
+    if (thumbnailPath != null && !kIsWeb && File(thumbnailPath!).existsSync()) {
+      return Image.file(
+        File(thumbnailPath!),
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => placeholder,
+      );
+    }
+
+    // Fallback to cloud URL
+    if (cloudUrl != null) {
+      return Image.network(
+        cloudUrl!,
+        fit: BoxFit.cover,
+        loadingBuilder: (context, child, loadingProgress) {
+          if (loadingProgress == null) return child;
+          return Center(
+            child: SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation(
+                  isDark ? Colors.white : const Color(0xFF1D4ED8),
+                ),
+              ),
+            ),
+          );
+        },
+        errorBuilder: (_, __, ___) => placeholder,
+      );
+    }
+
+    return placeholder;
+  }
+}
+
+class _MenuItemRow extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final String text;
+  final Color? textColor;
+
+  const _MenuItemRow({
+    Key? key,
+    required this.icon,
+    required this.iconColor,
+    required this.text,
+    this.textColor,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final defaultColor =
+        textColor ?? Theme.of(context).textTheme.bodyMedium?.color;
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: iconColor),
+        const SizedBox(width: 10),
+        Text(
+          text,
+          style: TextStyle(color: defaultColor, fontSize: 14),
+        ),
+      ],
+    );
+  }
+}
+
+class _DialogPlaceholder extends StatelessWidget {
+  final IconData icon;
+  final String text;
+
+  const _DialogPlaceholder({
+    Key? key,
+    required this.icon,
+    required this.text,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 60, color: Colors.white),
+          const SizedBox(height: 10),
+          Text(
+            text,
+            style: const TextStyle(color: Colors.white),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EmptyDownloads extends StatelessWidget {
+  final bool isDark;
+
+  const _EmptyDownloads({Key? key, required this.isDark}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final colorMuted = isDark ? Colors.grey[400] : Colors.grey[600];
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.folder_off_rounded,
+              size: 90,
+              color: isDark ? Colors.grey[700] : Colors.grey[300],
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'No diagrams yet',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+                color: isDark ? Colors.white : const Color(0xFF111827),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Create and save OFC diagrams to see them listed here.',
+              style: TextStyle(
+                fontSize: 14,
+                color: colorMuted,
+                height: 1.5,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ErrorSection extends StatelessWidget {
+  final String error;
+  final VoidCallback onRetry;
+
+  const _ErrorSection({
+    Key? key,
+    required this.error,
+    required this.onRetry,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.error_outline,
+                size: 60, color: isDark ? Colors.red[300] : Colors.red),
+            const SizedBox(height: 16),
+            Text(
+              'Something went wrong',
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 18,
+                color: isDark ? Colors.white : const Color(0xFF111827),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              error,
+              style: TextStyle(
+                fontSize: 13,
+                color: isDark ? Colors.grey[400] : Colors.grey[600],
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: onRetry,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1D4ED8),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('Retry'),
+            ),
+          ],
+        ),
       ),
     );
   }
