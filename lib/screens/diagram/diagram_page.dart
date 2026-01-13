@@ -6,10 +6,16 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:flutter/rendering.dart';
-import '../../html_stub.dart' if (dart.library.html) '../../html_real.dart'
-    as html;
+// Replace the HTML import at the top with:
+import 'dart:html' as html if (dart.library.html) 'dart:html';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:math' as math;
+import 'dart:convert';
+import 'dart:ui' as ui;
+import 'package:flutter/rendering.dart';
+import 'package:image/image.dart' as img;
+import '../../utils/diagram_navigation.dart';
+import '../../utils/diagram_svg_export.dart';
 
 // ---------------- Helper Functions ----------------
 const double ln10 = 2.302585092994046;
@@ -75,6 +81,28 @@ class DiagramNode {
   bool get isSplitter => deviceType == 'splitter';
   bool get isHeadend => deviceType == 'headend';
   bool get isCouplerSplitBlock => isCouplerOutput;
+}
+
+class OccupiedEnvelope {
+  final double xStart;
+  final double xEnd;
+  final double yTop;
+  final double yBottom;
+  final int nodeId; // Track which node owns this space
+
+  OccupiedEnvelope({
+    required this.xStart,
+    required this.xEnd,
+    required this.yTop,
+    required this.yBottom,
+    required this.nodeId,
+  });
+
+  bool overlapsWith(double x1, double x2, double y1, double y2) {
+    final xOverlap = !(x2 < xStart || x1 > xEnd);
+    final yOverlap = !(y2 < yTop || y1 > yBottom);
+    return xOverlap && yOverlap;
+  }
 }
 
 // ---------------- CouplerCalculator ----------------
@@ -271,201 +299,153 @@ class SplitterCalculator {
 class OFCDiagramPage extends StatefulWidget {
   final Map? savedData;
   const OFCDiagramPage({Key? key, this.savedData}) : super(key: key);
+
   @override
   State<OFCDiagramPage> createState() => _OFCDiagramPageState();
 }
 
-class BlockPositionManager {
+String? _projectId;
+String? _projectName;
+
+class EnvelopeLayoutManager {
   static const double blockWidth = 140.0;
   static const double blockHeight = 120.0;
-  static const double minSpacing = 200.0; // Minimum horizontal spacing
-  static const double verticalSpacing =
-      290.0; // Vertical spacing between levels
+  static const double horizontalPadding = 60.0; // Space around blocks
+  static const double verticalPadding = 40.0;
+  static const double verticalStep = 25.0; // Search step for free Y position
+  static const double minHorizontalSpacing =
+      200.0; // Min spacing between siblings
+  static const double verticalSpacing = 290.0; // Distance between parent-child
 
-  static double calculateOptimalSpacing(int siblingCount, int level) {
-    // Use a base spacing that scales with sibling count
-    double baseSpacing = 400.0; // Increased base spacing
+  // Global occupancy tracker
+  static final List<OccupiedEnvelope> _occupiedZones = [];
 
-    // Increase spacing for more siblings
-    if (siblingCount > 2) {
-      baseSpacing = 400.0 + (siblingCount * 50.0);
-    }
-
-    // Add level-based scaling to prevent overlap in deep trees
-    if (level > 1) {
-      baseSpacing += (level * 30.0);
-    }
-
-    return baseSpacing;
+  // Clear all occupied zones (call at start of layout)
+  static void reset() {
+    _occupiedZones.clear();
   }
 
-  static List<double> distributePositions(
-      int count, double centerX, double spacing) {
-    if (count == 1) {
-      return [centerX];
-    }
+  // Find a free Y position for a block at given X
+  static double findFreeY({
+    required double xCenter,
+    required double preferredY,
+    required int nodeId,
+  }) {
+    final xStart = xCenter - blockWidth / 2 - horizontalPadding;
+    final xEnd = xCenter + blockWidth / 2 + horizontalPadding;
+    final height = blockHeight + verticalPadding * 2;
 
-    List<double> positions = [];
-    final totalWidth = (count - 1) * spacing;
-    final startX = centerX - totalWidth / 2;
-
-    for (int i = 0; i < count; i++) {
-      positions.add(startX + i * spacing);
-    }
-
-    return _resolveCollisions(positions, count, centerX);
-  }
-
-  static List<double> _resolveCollisions(
-      List<double> positions, int count, double centerX) {
-    if (positions.length <= 1) return positions;
-
-    bool hasCollision = true;
+    double testY = preferredY;
+    int maxIterations = 200; // Prevent infinite loops
     int iterations = 0;
-    const maxIterations = 50; // Increased iterations for better resolution
 
-    // Define required minimum space between blocks
-    const double requiredSpace = blockWidth + minSpacing;
+    while (iterations < maxIterations) {
+      bool hasCollision = false;
 
-    while (hasCollision && iterations < maxIterations) {
-      hasCollision = false;
-
-      // Check for collisions between adjacent blocks
-      for (int i = 0; i < positions.length - 1; i++) {
-        double currentPos = positions[i];
-        double nextPos = positions[i + 1];
-        double actualSpace = nextPos - currentPos;
-
-        if (actualSpace < requiredSpace) {
+      for (final zone in _occupiedZones) {
+        if (zone.overlapsWith(xStart, xEnd, testY, testY + height)) {
           hasCollision = true;
-          double overlap = requiredSpace - actualSpace;
-
-          // Distribute the overlap evenly to both sides
-          // Move left blocks left and right blocks right
-          for (int j = 0; j <= i; j++) {
-            positions[j] -= overlap / 2;
-          }
-          for (int j = i + 1; j < positions.length; j++) {
-            positions[j] += overlap / 2;
-          }
+          break;
         }
       }
 
-      // Also check for symmetry - keep center balanced
-      if (positions.isNotEmpty) {
-        double currentCenter = (positions.first + positions.last) / 2;
-        double offset = centerX - currentCenter;
-
-        if (offset.abs() > 10) {
-          // Only adjust if significantly off-center
-          for (int i = 0; i < positions.length; i++) {
-            positions[i] += offset;
-          }
-        }
+      if (!hasCollision) {
+        return testY;
       }
 
+      testY += verticalStep;
       iterations++;
     }
 
-    // Final pass: ensure minimum spacing and no collisions
-    return _finalizePositions(positions, requiredSpace, centerX);
+    // Fallback: return far below everything
+    return preferredY + (iterations * verticalStep);
   }
 
-  static List<double> _finalizePositions(
-      List<double> positions, double requiredSpace, double centerX) {
-    if (positions.isEmpty) return positions;
+  // Reserve space for a block
+  static void reserveSpace({
+    required double xCenter,
+    required double yTop,
+    required int nodeId,
+  }) {
+    final envelope = OccupiedEnvelope(
+      xStart: xCenter - blockWidth / 2 - horizontalPadding,
+      xEnd: xCenter + blockWidth / 2 + horizontalPadding,
+      yTop: yTop - verticalPadding,
+      yBottom: yTop + blockHeight + verticalPadding,
+      nodeId: nodeId,
+    );
 
-    // Sort positions to ensure they're in order
-    positions.sort();
+    _occupiedZones.add(envelope);
+  }
 
-    // Force minimum spacing
-    for (int i = 0; i < positions.length - 1; i++) {
-      double currentPos = positions[i];
-      double nextPos = positions[i + 1];
+  // Calculate initial X positions for siblings (same as before)
+  static List<double> calculateInitialPositions({
+    required int count,
+    required double parentX,
+  }) {
+    if (count == 1) return [parentX];
 
-      if (nextPos - currentPos < requiredSpace) {
-        double neededAdjustment = requiredSpace - (nextPos - currentPos);
-        // Push the next position to the right
-        for (int j = i + 1; j < positions.length; j++) {
-          positions[j] += neededAdjustment;
+    final spacing = minHorizontalSpacing;
+    final totalWidth = (count - 1) * spacing;
+    final startX = parentX - totalWidth / 2;
+
+    return List.generate(count, (i) => startX + i * spacing);
+  }
+
+  // Adjust X positions to avoid horizontal collisions (quick check)
+  static List<double> adjustForHorizontalCollisions({
+    required List<double> positions,
+    required double y,
+  }) {
+    // Check each position for horizontal conflicts at this Y level
+    List<double> adjusted = List.from(positions);
+    bool changed = true;
+    int maxIterations = 50;
+    int iterations = 0;
+
+    while (changed && iterations < maxIterations) {
+      changed = false;
+      iterations++;
+
+      for (int i = 0; i < adjusted.length - 1; i++) {
+        double x1 = adjusted[i];
+        double x2 = adjusted[i + 1];
+        double gap = x2 - x1;
+
+        if (gap < blockWidth + horizontalPadding * 2) {
+          // Too close, push apart
+          double pushAmount = (blockWidth + horizontalPadding * 2 - gap) / 2;
+          adjusted[i] -= pushAmount;
+          adjusted[i + 1] += pushAmount;
+          changed = true;
         }
       }
     }
 
-    // Re-center the positions around the original center
-    if (positions.isNotEmpty) {
-      double currentCenter = (positions.first + positions.last) / 2;
-      double offset = centerX - currentCenter;
-
-      for (int i = 0; i < positions.length; i++) {
-        positions[i] += offset;
-      }
-    }
-
-    return positions;
+    return adjusted;
   }
 
-  // New method: Check if a position would cause collision with existing positions
-  static bool wouldCollide(double newX, List<double> existingPositions) {
-    for (double existingX in existingPositions) {
-      if ((newX - existingX).abs() < blockWidth + minSpacing) {
-        return true;
-      }
-    }
-    return false;
+  // Check if a position would collide with any existing envelope
+  static bool wouldCollide({
+    required double xCenter,
+    required double yTop,
+  }) {
+    final xStart = xCenter - blockWidth / 2 - horizontalPadding;
+    final xEnd = xCenter + blockWidth / 2 + horizontalPadding;
+    final yBottom = yTop + blockHeight + verticalPadding;
+
+    return _occupiedZones
+        .any((zone) => zone.overlapsWith(xStart, xEnd, yTop, yBottom));
   }
-// Replace the BlockPositionManager.findAvailablePosition method:
 
-  static double findAvailablePosition(
-      double desiredX, List<double> existingPositions) {
-    if (existingPositions.isEmpty) return desiredX;
-
-    // Sort existing positions
-    List<double> sorted = List.from(existingPositions)..sort();
-
-    const double requiredSpace = blockWidth + minSpacing;
-
-    // Try desired position first
-    bool canUseDesired = true;
-    for (double existingX in sorted) {
-      if ((desiredX - existingX).abs() < requiredSpace) {
-        canUseDesired = false;
-        break;
-      }
-    }
-
-    if (canUseDesired) return desiredX;
-
-    // Find gaps in existing positions
-    for (int i = 0; i < sorted.length - 1; i++) {
-      double gapStart = sorted[i] + requiredSpace;
-      double gapEnd = sorted[i + 1] - requiredSpace;
-
-      if (gapEnd - gapStart >= blockWidth) {
-        // Found a gap - use it if it's close to desired position
-        double gapCenter = (gapStart + gapEnd) / 2;
-        if ((gapCenter - desiredX).abs() < 500) {
-          return gapCenter;
-        }
-      }
-    }
-
-    // Try moving right with increased spacing
-    double rightPos = sorted.last + requiredSpace * 1.5;
-
-    // Try moving left with increased spacing
-    double leftPos = sorted.first - requiredSpace * 1.5;
-
-    // Choose the closest available position
-    double rightDistance = (rightPos - desiredX).abs();
-    double leftDistance = (leftPos - desiredX).abs();
-
-    return rightDistance < leftDistance ? rightPos : leftPos;
+  // Get all occupied zones (for debugging)
+  static List<OccupiedEnvelope> getOccupiedZones() {
+    return List.from(_occupiedZones);
   }
 }
 
 class _OFCDiagramPageState extends State<OFCDiagramPage> {
-  final GlobalKey repaintKey = GlobalKey();
+  final GlobalKey repaintKey = GlobalKey(); // Fixed: Proper key declaration
   final TextEditingController _headendNameCtrl =
       TextEditingController(text: "EDFA");
   final TextEditingController _headendDbmCtrl =
@@ -473,14 +453,53 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
   final TextEditingController _wdmLossCtrl = TextEditingController(text: "0.0");
   final TextEditingController _wdmPowerCtrl =
       TextEditingController(text: "0.0");
+
+  bool _isSaving = false; // Add saving state
+
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  List<DiagramNode> _highlightedNodes = [];
   DiagramNode? root;
+  DiagramNode? _highlightedNode;
+
+// Replace the existing _findAllMatchingNodes method with:
+  List<DiagramNode> _findAllMatchingNodes(DiagramNode node, String query) {
+    if (query.isEmpty) return [];
+
+    final lowerQuery = query.toLowerCase().trim();
+    final matches = <DiagramNode>[];
+
+    void searchRecursive(DiagramNode current) {
+      // Check endpoint name
+      if (current.endpointName != null &&
+          current.endpointName!.toLowerCase().contains(lowerQuery)) {
+        matches.add(current);
+      }
+      // Check node label
+      else if (current.label.toLowerCase().contains(lowerQuery)) {
+        matches.add(current);
+      }
+      // Check description
+      else if (current.endpointDescription != null &&
+          current.endpointDescription!.toLowerCase().contains(lowerQuery)) {
+        matches.add(current);
+      }
+
+      // Search children
+      for (var child in current.children) {
+        searchRecursive(child);
+      }
+    }
+
+    searchRecursive(node);
+    return matches;
+  }
 
   int _nodeCounter = 0;
   String _selectedWavelength = '1550';
   bool _useWdm = false;
   double _wdmLoss = 0.0;
   final SupabaseClient _supabase = Supabase.instance.client;
-
   @override
   void initState() {
     super.initState();
@@ -488,8 +507,9 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     Hive.openBox('diagram_history');
     Hive.openBox('diagram_downloads');
 
-    // Load saved data if provided
     if (widget.savedData != null) {
+      _projectId = widget.savedData!['projectId'];
+      _projectName = widget.savedData!['projectName'];
       _loadSavedDiagram(widget.savedData!);
     }
   }
@@ -636,11 +656,16 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       wdmLoss: _wdmLoss,
     );
   }
-  // Add AFTER _initRoot() method
 
   void _loadSavedDiagram(Map data) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+
+      // ✅ CRITICAL: Load WDM power FIRST before setState
+      double loadedWdmPower = 0.0;
+      if (data['wdmPower'] != null) {
+        loadedWdmPower = (data['wdmPower'] as num).toDouble();
+      }
 
       setState(() {
         if (data['headendName'] != null) {
@@ -660,10 +685,20 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
           _wdmLossCtrl.text = _wdmLoss.toString();
         }
 
-        // Load entire diagram tree if available
+        // ✅ CRITICAL FIX: Set WDM power in controller BEFORE deserializing tree
+        _wdmPowerCtrl.text = loadedWdmPower.toString();
+        print('✅ WDM power set to controller: ${_wdmPowerCtrl.text}');
+
         if (data['diagramTree'] != null) {
           try {
             root = _deserializeDiagramTree(data['diagramTree'], null);
+
+            // ✅ Propagate WDM to tree after loading
+            if (_useWdm && loadedWdmPower > 0) {
+              _propagateWdmToTree(root!, loadedWdmPower);
+            }
+
+            _recalculateAll(root!);
           } catch (e) {
             print('Error deserializing diagram: $e');
             _initRoot();
@@ -673,13 +708,114 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
         }
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Diagram loaded! You can continue editing.'),
-          duration: Duration(seconds: 2),
-        ),
-      );
+      // ✅ Force UI rebuild after 100ms to ensure WDM input shows value
+      Future.delayed(Duration(milliseconds: 100), () {
+        if (mounted) {
+          setState(() {
+            // Trigger rebuild with loaded value
+            print('✅ UI rebuild - WDM value: ${_wdmPowerCtrl.text}');
+          });
+        }
+      });
     });
+  }
+
+  // Add this method after _loadSavedDiagram
+  void _restoreFromSavedData(Map data) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      final loadedWdmPower = (data['wdmPower'] as num?)?.toDouble() ?? 0.0;
+
+      setState(() {
+        // Restore headend settings
+        if (data['headendName'] != null) {
+          _headendNameCtrl.text = data['headendName'];
+        }
+        if (data['headendPower'] != null) {
+          _headendDbmCtrl.text = data['headendPower'].toString();
+        }
+        if (data['wavelength'] != null) {
+          _selectedWavelength = data['wavelength'];
+        }
+        if (data['useWdm'] != null) {
+          _useWdm = data['useWdm'];
+        }
+        if (data['wdmLoss'] != null) {
+          _wdmLoss = data['wdmLoss'];
+          _wdmLossCtrl.text = _wdmLoss.toString();
+        }
+
+        // ✅ Set WDM power
+        _wdmPowerCtrl.text = loadedWdmPower.toString();
+
+        // Restore diagram tree
+        if (data['diagramTree'] != null) {
+          try {
+            root = _deserializeDiagramTree(data['diagramTree'], null);
+
+            if (_useWdm && loadedWdmPower > 0) {
+              _propagateWdmToTree(root!, loadedWdmPower);
+            }
+
+            _recalculateAll(root!);
+          } catch (e) {
+            print('❌ Error restoring diagram: $e');
+            _initRoot();
+          }
+        } else {
+          _updateHeadend();
+        }
+      });
+
+      debugPrint(
+          '🔁 Diagram restored with WDM: $_useWdm, Power: $loadedWdmPower');
+    });
+  }
+
+// Add this helper method to propagate WDM power to all nodes
+  void _propagateWdmToTree(DiagramNode node, double wdmPower) {
+    if (node.useWdm) {
+      // For coupler outputs
+      if (node.isCouplerOutput) {
+        final parent = _findNode(root, node.parentId!);
+        if (parent != null) {
+          final ratio = node.couplerRatio ?? 50;
+          final wdmLosses =
+              _calculateCouplerLosses(ratio, wdmPower, '1310', isWdm: true);
+          final index = parent.children.indexOf(node);
+          if (index == 0) {
+            node.wdmOutputPower = wdmLosses[0] - node.fiberLoss;
+          } else if (index == 1) {
+            node.wdmOutputPower = wdmLosses[1] - node.fiberLoss;
+          }
+        }
+      }
+      // For splitter outputs
+      else if (node.isSplitterOutput && node.deviceConfig != null) {
+        final parts = node.deviceConfig!.split('::');
+        if (parts.length >= 2) {
+          final split = int.tryParse(parts[0]) ?? 2;
+          final splitterVal = double.tryParse(parts[1]) ?? 1.0;
+          final calc = SplitterCalculator(splitterVal);
+          final all = calc.calculateLoss();
+          final section = 'LOSS-13 10';
+          final sec = all[section]!;
+          final entry = sec.firstWhere(
+            (e) => e['split'] == split,
+            orElse: () => sec.first,
+          );
+          final splitterLossValue = (entry['value'] as num).toDouble();
+          final splitterLossDisplay = splitterLossValue.abs();
+          node.wdmOutputPower = wdmPower - splitterLossDisplay - node.fiberLoss;
+        }
+      }
+    }
+
+    // Recursively process children
+    for (var child in node.children) {
+      _propagateWdmToTree(child, wdmPower);
+    }
   }
 
   List<double> _calculateCouplerLosses(
@@ -825,6 +961,9 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
   }
 
   void _updateHeadend() {
+    // ✅ CRITICAL: Get WDM input value BEFORE setState
+    final currentWdmValue = double.tryParse(_wdmPowerCtrl.text) ?? 0.0;
+
     setState(() {
       root!.label =
           _headendNameCtrl.text.isEmpty ? 'EDFA' : _headendNameCtrl.text;
@@ -833,20 +972,72 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       root!.useWdm = _useWdm;
       root!.wdmLoss = _wdmLoss;
 
-      // Propagate settings to ALL nodes first
+      _highlightedNode = null;
+      _searchController.clear();
+
       _propagateSettings(root!);
 
-      // Then recalculate all values
+      // ✅ CRITICAL: Propagate WDM with current value
+      if (_useWdm && currentWdmValue > 0) {
+        _propagateWdmToTree(root!, currentWdmValue);
+      }
+
       _recalculateAll(root!);
     });
   }
 
-// Add this helper method
   void _propagateSettings(DiagramNode node) {
     for (var child in node.children) {
       child.wavelength = node.wavelength;
       child.useWdm = node.useWdm;
       child.wdmLoss = node.wdmLoss;
+
+      // ✅ Propagate WDM power changes for BOTH couplers AND splitters
+      if (node.useWdm) {
+        if (child.isCouplerOutput) {
+          // Recalculate WDM for coupler outputs
+          final wdmInput = double.tryParse(_wdmPowerCtrl.text) ?? 0.0;
+          final ratio = child.couplerRatio ?? 50;
+          final wdmLosses =
+              _calculateCouplerLosses(ratio, wdmInput, '1310', isWdm: true);
+
+          if (child.parentId != null) {
+            final parent = _findNode(root, child.parentId!);
+            if (parent != null) {
+              final index = parent.children.indexOf(child);
+              if (index == 0) {
+                child.wdmOutputPower = wdmLosses[0] - child.fiberLoss;
+              } else if (index == 1) {
+                child.wdmOutputPower = wdmLosses[1] - child.fiberLoss;
+              }
+            }
+          }
+        } else if (child.isSplitterOutput && child.deviceConfig != null) {
+          // ✅ Calculate WDM for splitter outputs
+          final parts = child.deviceConfig!.split('::');
+          if (parts.length >= 2) {
+            final split = int.tryParse(parts[0]) ?? 2;
+            final splitterVal = double.tryParse(parts[1]) ?? 1.0;
+
+            final wdmInput = double.tryParse(_wdmPowerCtrl.text) ?? 0.0;
+            final calc = SplitterCalculator(splitterVal);
+            final all = calc.calculateLoss();
+            final section = '1310' == '1310' ? 'LOSS-13 10' : 'LOSS-15 50';
+            final sec = all[section]!;
+            final entry = sec.firstWhere(
+              (e) => e['split'] == split,
+              orElse: () => sec.first,
+            );
+
+            final splitterLossValue = (entry['value'] as num).toDouble();
+            final splitterLossDisplay = splitterLossValue.abs();
+
+            child.wdmOutputPower =
+                wdmInput - splitterLossDisplay - child.fiberLoss;
+          }
+        }
+      }
+
       _propagateSettings(child);
     }
   }
@@ -1767,8 +1958,6 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                   }
 
                   final fiberLoss = distance * fiberAttenuationDbPerKm;
-
-                  // Use splitter value of 0.0 (exact values from calculator)
                   final splitterVal = 0.0;
 
                   final calc = SplitterCalculator(splitterVal);
@@ -1781,20 +1970,19 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                     orElse: () => sec.first,
                   );
 
-                  // IMPORTANT: This value is NEGATIVE (e.g., -3.6)
                   final splitterLossValue = (entry['value'] as num).toDouble();
-
-                  // Get the ABSOLUTE value for device loss
                   final splitterLossDisplay = splitterLossValue.abs();
-
-                  // CORRECT: Calculate device loss as: splitter loss - distance loss
                   final finalDeviceLoss = splitterLossDisplay - fiberLoss;
-
-                  // CORRECT: Calculate output signal
                   final outputSignal =
                       parent.signal - splitterLossDisplay - fiberLoss;
 
-                  // Create ALL splitter outputs with the SAME values
+                  // ✅ Calculate WDM output power for splitter
+                  double wdmOutputPower = 0.0;
+                  if (parent.useWdm) {
+                    final wdmInput = double.tryParse(_wdmPowerCtrl.text) ?? 0.0;
+                    wdmOutputPower = wdmInput - splitterLossDisplay - fiberLoss;
+                  }
+
                   final baseLabel =
                       labelCtrl.text.isEmpty ? 'Splitter' : labelCtrl.text;
 
@@ -1802,8 +1990,8 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                     final outputNode = DiagramNode(
                       id: _nodeCounter++,
                       label: baseLabel,
-                      signal: outputSignal, // Same output signal for all
-                      distance: distance, // Same distance for all
+                      signal: outputSignal,
+                      distance: distance,
                       parentId: parent.id,
                       deviceType: 'splitter',
                       deviceConfig: '$split::$splitterVal',
@@ -1811,8 +1999,9 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                       useWdm: parent.useWdm,
                       wdmLoss: parent.wdmLoss,
                       isSplitterOutput: true,
-                      deviceLoss: finalDeviceLoss, // Same device loss for all
+                      deviceLoss: finalDeviceLoss,
                       fiberLoss: fiberLoss,
+                      wdmOutputPower: wdmOutputPower, // ✅ ADD THIS
                     );
                     parent.children.add(outputNode);
                   }
@@ -2178,6 +2367,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     return cnt;
   }
 
+// In _DiagramPainter class, add this method:
   DiagramNode? _findNode(DiagramNode? n, int id) {
     if (n == null) return null;
     if (n.id == id) return n;
@@ -2187,9 +2377,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     }
     return null;
   }
-  // Add AFTER _findNode method
 
-// Serialize diagram tree to JSON
   Map<String, dynamic> _serializeDiagramTree(DiagramNode node) {
     return {
       'id': node.id,
@@ -2206,8 +2394,9 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       'isSplitterOutput': node.isSplitterOutput,
       'deviceLoss': node.deviceLoss,
       'fiberLoss': node.fiberLoss,
-      'endpointName': node.endpointName, // ADD THIS
-      'endpointDescription': node.endpointDescription, // ADD THIS
+      'wdmOutputPower': node.wdmOutputPower, // ✅ ADD THIS
+      'endpointName': node.endpointName,
+      'endpointDescription': node.endpointDescription,
       'children':
           node.children.map((child) => _serializeDiagramTree(child)).toList(),
     };
@@ -2223,7 +2412,6 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
         .toList();
   }
 
-// Deserialize JSON back to diagram tree
   DiagramNode _deserializeDiagramTree(
       Map<String, dynamic> data, int? parentId) {
     final node = DiagramNode(
@@ -2241,8 +2429,9 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       isSplitterOutput: data['isSplitterOutput'] ?? false,
       deviceLoss: data['deviceLoss'] ?? 0.0,
       fiberLoss: data['fiberLoss'] ?? 0.0,
-      endpointName: data['endpointName'], // ADD THIS
-      endpointDescription: data['endpointDescription'], // ADD THIS
+      wdmOutputPower: data['wdmOutputPower'] ?? 0.0, // ✅ ADD THIS
+      endpointName: data['endpointName'],
+      endpointDescription: data['endpointDescription'],
       parentId: parentId,
     );
 
@@ -2971,60 +3160,42 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
   }
 
   Future<void> _saveDiagram() async {
-    // Show loading indicator immediately
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => const Center(
-        child: Card(
-          child: Padding(
-            padding: EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                CircularProgressIndicator(),
-                SizedBox(height: 16),
-                Text('Generating diagram...'),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
+    if (root == null) return;
+
+    setState(() => _isSaving = true);
 
     try {
-      await Future.delayed(const Duration(milliseconds: 100));
+      // 1. Capture the RepaintBoundary
+      final boundary = repaintKey.currentContext!.findRenderObject()
+          as RenderRepaintBoundary;
+      final image = await boundary.toImage(pixelRatio: 2.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      final pngBytes = byteData!.buffer.asUint8List();
 
-      final boundary = repaintKey.currentContext?.findRenderObject()
-          as RenderRepaintBoundary?;
-      if (boundary == null || !boundary.attached) {
-        Navigator.pop(context); // Close loading dialog
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Diagram not ready. Please try again.')),
-        );
-        return;
-      }
+      // 2. Generate thumbnail (300x300)
+      final fullImage = img.decodeImage(pngBytes);
+      if (fullImage == null) throw Exception('Failed to decode image');
 
-      final ui.Image img = await boundary.toImage(pixelRatio: 2.0);
-      final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
-      if (byteData == null) {
-        Navigator.pop(context); // Close loading dialog
-        throw Exception('Failed to encode image');
-      }
-      final bytes = byteData.buffer.asUint8List();
+      final thumbnail = img.copyResize(fullImage, width: 300, height: 300);
+      final thumbnailBytes = Uint8List.fromList(img.encodePng(thumbnail));
 
-      String fileName =
-          'ofc_diagram_${DateTime.now().millisecondsSinceEpoch}.png';
-      String? localPath;
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final fileName = 'ofc_diagram_$timestamp.png';
+      final thumbFileName = 'ofc_thumb_$timestamp.png';
+
+      String? fullImagePath;
+      String? thumbnailPath;
 
       if (kIsWeb) {
-        final blob = html.Blob([bytes]);
+        // Web download
+        final blob = html.Blob([pngBytes], 'image/png');
         final url = html.Url.createObjectUrlFromBlob(blob);
         final anchor = html.AnchorElement(href: url)
           ..setAttribute('download', fileName)
           ..click();
         html.Url.revokeObjectUrl(url);
       } else {
+        // Mobile save
         Directory dir;
         final possible = Directory('/storage/emulated/0/Download');
         if (await possible.exists()) {
@@ -3032,60 +3203,178 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
         } else {
           dir = await getApplicationDocumentsDirectory();
         }
-        final file = File('${dir.path}/$fileName');
-        await file.writeAsBytes(bytes);
-        localPath = file.path;
+
+        // Save full image
+        final fullFile = File('${dir.path}/$fileName');
+        await fullFile.writeAsBytes(pngBytes);
+        fullImagePath = fullFile.path;
+
+        // Save thumbnail
+        final thumbFile = File('${dir.path}/$thumbFileName');
+        await thumbFile.writeAsBytes(thumbnailBytes);
+        thumbnailPath = thumbFile.path;
+
+        print('✅ Saved full image: $fullImagePath');
+        print('✅ Saved thumbnail: $thumbnailPath');
       }
 
-      // Upload to cloud in background (don't wait)
-      String? publicUrl;
-      final user = _supabase.auth.currentUser;
-      if (user != null) {
-        _uploadToCloud(bytes, fileName, user.id).then((url) {
-          publicUrl = url;
-        }).catchError((e) {
-          print('Background upload error: $e');
-        });
-      }
-
-      // Save to Hive
+      // 3. Save to Hive with both paths
       final downloadsBox = await Hive.openBox('diagram_downloads');
       await downloadsBox.add({
-        'name': 'OFC Diagram ${DateTime.now().toString().split('.').first}',
+        'name': _projectName ??
+            'OFC Diagram ${DateTime.now().toString().split('.').first}',
         'fileName': fileName,
-        'path': localPath,
-        'cloudUrl': publicUrl,
         'date': DateTime.now().toIso8601String(),
-        'type': 'diagram',
-        'size': bytes.length,
+        'type': 'png',
+        'path': fullImagePath,
+        'thumbnailPath': thumbnailPath, // ✅ CRITICAL: Save thumbnail path
+        'cloudUrl': null,
         'headendName': _headendNameCtrl.text,
         'headendPower':
             double.tryParse(_headendDbmCtrl.text) ?? defaultHeadendDbm,
         'wavelength': _selectedWavelength,
         'useWdm': _useWdm,
         'wdmLoss': _wdmLoss,
-        'diagramTree': root != null ? _serializeDiagramTree(root!) : null,
+        'wdmPower': double.tryParse(_wdmPowerCtrl.text) ?? 0.0,
+        'diagramTree': _serializeDiagramTree(root!),
       });
 
-      Navigator.pop(context); // Close loading dialog
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-              'Diagram saved successfully!${localPath != null ? '\nLocation: $localPath' : ''}'),
-          duration: const Duration(seconds: 3),
-          action: SnackBarAction(
-            label: 'OK',
-            onPressed: () {},
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.white),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    '✅ Diagram saved successfully!\nFull image and thumbnail created.',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 3),
           ),
-        ),
-      );
+        );
+      }
     } catch (e) {
-      Navigator.pop(context); // Close loading dialog
-      print('Save error: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Save failed: $e')),
-      );
+      print('❌ Save error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save: ${e.toString()}'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSaving = false);
+      }
+    }
+  }
+
+// Add this helper method
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 6),
+        backgroundColor: Colors.red,
+        action: SnackBarAction(
+          label: 'OK',
+          textColor: Colors.white,
+          onPressed: () {},
+        ),
+      ),
+    );
+  }
+
+// Add this helper method to calculate diagram bounds
+  Size _calculateDiagramSize(DiagramNode root) {
+    double minX = double.infinity;
+    double maxX = double.negativeInfinity;
+    double minY = double.infinity;
+    double maxY = double.negativeInfinity;
+
+    void traverse(DiagramNode node, double x, double y) {
+      // Update bounds with generous padding
+      minX = math.min(minX, x - 150);
+      maxX = math.max(maxX, x + 150);
+      minY = math.min(minY, y - 150);
+      maxY = math.max(maxY, y + 250); // Extra space for house icons
+
+      // Process children
+      if (node.children.isNotEmpty) {
+        final count = node.children.length;
+        final xPositions = EnvelopeLayoutManager.calculateInitialPositions(
+          count: count,
+          parentX: x,
+        );
+
+        final childBaseY = y + EnvelopeLayoutManager.verticalSpacing;
+        final adjustedPositions =
+            EnvelopeLayoutManager.adjustForHorizontalCollisions(
+          positions: xPositions,
+          y: childBaseY,
+        );
+
+        for (int i = 0; i < count; i++) {
+          final child = node.children[i];
+          final childX = adjustedPositions[i];
+          final childY = EnvelopeLayoutManager.findFreeY(
+            xCenter: childX,
+            preferredY: childBaseY,
+            nodeId: child.id,
+          );
+
+          traverse(child, childX, childY);
+        }
+      }
+    }
+
+    EnvelopeLayoutManager.reset();
+    traverse(root, 3000, 100);
+
+    return Size(
+      maxX - minX + 300, // Extra padding
+      maxY - minY + 300,
+    );
+  }
+
+  @override
+  void dispose() {
+    if (_projectId != null) {
+      _saveProjectData();
+    }
+    super.dispose();
+  }
+
+  Future<void> _saveProjectData() async {
+    if (_projectId == null) return;
+
+    final projectsBox = await Hive.openBox('network_projects');
+    final existingData = projectsBox.get(_projectId);
+
+    if (existingData != null) {
+      final updated = {
+        ...Map<String, dynamic>.from(existingData),
+        'updatedAt': DateTime.now().toIso8601String(),
+        'headendName': _headendNameCtrl.text,
+        'headendPower':
+            double.tryParse(_headendDbmCtrl.text) ?? defaultHeadendDbm,
+        'wavelength': _selectedWavelength,
+        'useWdm': _useWdm,
+        'wdmLoss': _wdmLoss,
+        'wdmPower': double.tryParse(_wdmPowerCtrl.text) ?? 0.0, // ✅ ADD THIS
+        'diagramTree': root != null ? _serializeDiagramTree(root!) : null,
+      };
+      await projectsBox.put(_projectId, updated);
+
+      print('✅ Project saved with WDM power: ${_wdmPowerCtrl.text}'); // Debug
     }
   }
 
@@ -3109,24 +3398,45 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     }
   }
 
+  // Add this method to _OFCDiagramPageState class
+  Future<void> _zoomOutAndSave() async {
+    // First show a message about zooming out
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Auto-zooming out to capture entire diagram...'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+
+    // Wait a bit for the message to be seen
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    // Now save the diagram
+    await _saveDiagram();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
       appBar: AppBar(
-        title: const Text('OFC Diagram Generator',
-            style: TextStyle(fontWeight: FontWeight.bold)),
+        title: Text(
+          _projectName ?? 'OFC Diagram Generator',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
         centerTitle: true,
         elevation: 0,
         backgroundColor: const Color(0xFF1A237E),
-        foregroundColor: Colors.white, // Add this line
-        iconTheme: const IconThemeData(color: Colors.white), // Add this line
+        foregroundColor: Colors.white,
+        iconTheme: const IconThemeData(color: Colors.white),
         actions: [
           IconButton(
             onPressed: () {
               setState(() {
                 _nodeCounter = 0;
                 _initRoot();
+                _searchController.clear();
+                _searchQuery = '';
               });
             },
             icon: const Icon(Icons.refresh, color: Colors.white70),
@@ -3139,175 +3449,398 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
           )
         ],
       ),
-      body: Column(children: [
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
+      body: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
               gradient: const LinearGradient(
-                  colors: [Color(0xFF1A237E), Color(0xFF283593)]),
+                colors: [Color(0xFF1A237E), Color(0xFF283593)],
+              ),
               boxShadow: [
                 BoxShadow(
-                    color: Colors.black.withOpacity(0.08),
-                    blurRadius: 12,
-                    offset: const Offset(0, 6))
-              ]),
-          child: Column(
-            children: [
-              Row(children: [
-                Expanded(
-                  flex: 6,
-                  child: TextField(
-                    controller: _headendNameCtrl,
-                    style: const TextStyle(color: Colors.white, fontSize: 16),
-                    decoration: InputDecoration(
-                      labelText: 'Headend Name',
-                      labelStyle: const TextStyle(color: Colors.white70),
-                      filled: true,
-                      fillColor: Colors.white.withOpacity(0.1),
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide.none),
-                      prefixIcon:
-                          const Icon(Icons.router, color: Colors.white70),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  flex: 2,
-                  child: TextField(
-                    controller: _headendDbmCtrl,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    style: const TextStyle(color: Colors.white, fontSize: 16),
-                    decoration: InputDecoration(
-                      labelText: 'Power (dBm)',
-                      labelStyle: const TextStyle(color: Colors.white70),
-                      filled: true,
-                      fillColor: Colors.white.withOpacity(0.1),
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide.none),
-                      prefixIcon:
-                          const Icon(Icons.flash_on, color: Colors.white70),
-                    ),
-                    onChanged: _onHeadendPowerChanged, // Add this line
-                  ),
-                ),
-              ]),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('Wavelength Configuration',
-                              style: TextStyle(
-                                  color: Colors.white70, fontSize: 12)),
-                          Row(
-                            children: [
-                              _buildWavelengthOption('1550', '1550 nm'),
-                              const SizedBox(width: 16),
-                              _buildWavelengthOption('1310', '1310 nm'),
-                            ],
+                  color: Colors.black.withOpacity(0.08),
+                  blurRadius: 12,
+                  offset: const Offset(0, 6),
+                )
+              ],
+            ),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 4,
+                      child: TextField(
+                        controller: _headendNameCtrl,
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 16),
+                        decoration: InputDecoration(
+                          labelText: 'Headend Name',
+                          labelStyle: const TextStyle(color: Colors.white70),
+                          filled: true,
+                          fillColor: Colors.white.withOpacity(0.1),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
                           ),
-                          const SizedBox(height: 8),
-                          Row(children: [Expanded(child: _buildWdmOption())]),
-                        ],
+                          prefixIcon:
+                              const Icon(Icons.router, color: Colors.white70),
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  ElevatedButton.icon(
-                    onPressed: _updateHeadend,
-                    icon: const Icon(Icons.update),
-                    label: const Text('Update Headend'),
-                    style: ElevatedButton.styleFrom(
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 2,
+                      child: TextField(
+                        controller: _headendDbmCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true),
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 16),
+                        decoration: InputDecoration(
+                          labelText: 'Power (dBm)',
+                          labelStyle: const TextStyle(color: Colors.white70),
+                          filled: true,
+                          fillColor: Colors.white.withOpacity(0.1),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
+                          ),
+                          prefixIcon:
+                              const Icon(Icons.flash_on, color: Colors.white70),
+                        ),
+                        onChanged: _onHeadendPowerChanged,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    // Wavelength section
+                    Expanded(
+                      flex: 3,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Wavelength',
+                              style: TextStyle(
+                                  color: Colors.white70, fontSize: 11),
+                            ),
+                            Row(
+                              children: [
+                                _buildWavelengthOption('1550', '1550nm'),
+                                const SizedBox(width: 8),
+                                _buildWavelengthOption('1310', '1310nm'),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+
+                    // WDM section - COMPACT
+                    Expanded(
+                      flex: 2,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: _useWdm
+                              ? Colors.amber.withOpacity(0.2)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: _useWdm
+                                ? Colors.amber
+                                : Colors.white.withOpacity(0.3),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: Checkbox(
+                                    value: _useWdm,
+                                    onChanged: (value) {
+                                      if (value == true &&
+                                          _selectedWavelength == '1310') {
+                                        _showWdmWarningDialog();
+                                        return;
+                                      }
+                                      setState(() {
+                                        _useWdm = value ?? false;
+                                        root!.useWdm = _useWdm;
+                                        if (!_useWdm) {
+                                          _wdmPowerCtrl.text = "0.0";
+                                          _resetWdmInTree(root!);
+                                        }
+                                        _recalculateAll(root!);
+                                      });
+                                    },
+                                    checkColor: Colors.white,
+                                    fillColor: MaterialStateProperty
+                                        .resolveWith<Color>((states) {
+                                      if (states
+                                          .contains(MaterialState.selected))
+                                        return Colors.amber;
+                                      return Colors.transparent;
+                                    }),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                const Text(
+                                  'WDM',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w500,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (_useWdm) ...[
+                              const SizedBox(height: 6),
+                              SizedBox(
+                                height: 36,
+                                child: TextField(
+                                  controller: _wdmPowerCtrl,
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                          decimal: true),
+                                  onChanged: (value) {
+                                    setState(() {
+                                      _recalculateAll(root!);
+                                    });
+                                  },
+                                  style: const TextStyle(
+                                      color: Colors.white, fontSize: 13),
+                                  decoration: InputDecoration(
+                                    hintText: 'Power',
+                                    hintStyle: const TextStyle(
+                                        color: Colors.white60, fontSize: 11),
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                      borderSide:
+                                          const BorderSide(color: Colors.amber),
+                                    ),
+                                    enabledBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                      borderSide:
+                                          const BorderSide(color: Colors.amber),
+                                    ),
+                                    focusedBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                      borderSide: const BorderSide(
+                                          color: Colors.amber, width: 2),
+                                    ),
+                                    contentPadding: const EdgeInsets.symmetric(
+                                        horizontal: 8, vertical: 8),
+                                    suffixText: 'dBm',
+                                    suffixStyle: const TextStyle(
+                                        color: Colors.white70, fontSize: 10),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+
+                    // Update button
+                    ElevatedButton.icon(
+                      onPressed: _updateHeadend,
+                      icon: const Icon(Icons.update, size: 18),
+                      label: const Text('Update'),
+                      style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.white,
                         foregroundColor: const Color(0xFF1A237E),
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 24, vertical: 16),
+                            horizontal: 20, vertical: 14),
                         shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12)),
-                        elevation: 2),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        elevation: 2,
+                      ),
+                    ),
+                  ],
+                ),
+
+                // Search bar moved here - BELOW configuration
+                const SizedBox(height: 12),
+                if (root != null)
+                  TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      hintText: 'Search endpoint by name...',
+                      hintStyle: const TextStyle(color: Colors.white60),
+                      prefixIcon:
+                          const Icon(Icons.search, color: Colors.white70),
+                      suffixIcon: _searchQuery.isNotEmpty
+                          ? Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (_highlightedNodes.isNotEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.only(right: 8),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: Colors.green.shade700,
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Text(
+                                        '${_highlightedNodes.length} found',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                IconButton(
+                                  icon: const Icon(Icons.clear,
+                                      color: Colors.white70),
+                                  onPressed: () {
+                                    setState(() {
+                                      _searchController.clear();
+                                      _searchQuery = '';
+                                      _highlightedNodes = [];
+                                    });
+                                  },
+                                ),
+                              ],
+                            )
+                          : null,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide.none,
+                      ),
+                      filled: true,
+                      fillColor: Colors.white.withOpacity(0.1),
+                    ),
+                    style: const TextStyle(color: Colors.white),
+                    onChanged: (value) {
+                      setState(() {
+                        _searchQuery = value;
+                        if (value.isNotEmpty && root != null) {
+                          _highlightedNodes =
+                              _findAllMatchingNodes(root!, value);
+                        } else {
+                          _highlightedNodes = [];
+                        }
+                      });
+                    },
                   ),
-                ],
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-        Expanded(
-          child: Container(
-            margin: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
+          // In the build method, update the Diagram Canvas section:
+          Expanded(
+            child: Container(
+              margin: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(18),
                 boxShadow: [
                   BoxShadow(
-                      color: Colors.black.withOpacity(0.06),
-                      blurRadius: 20,
-                      offset: const Offset(0, 12))
-                ]),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(18),
-              child: InteractiveViewer(
-                boundaryMargin: const EdgeInsets.all(500),
-                minScale: 0.1,
-                maxScale: 8.0,
-                constrained: false,
-                child: RepaintBoundary(
-                  key: repaintKey,
-                  child: SizedBox(
-                    width: 8000,
-                    height: 5000,
-                    child: root != null
-                        ? DiagramWidget(
-                            root: root!, onTapNode: _showNodeOptions)
-                        : const Center(child: Text('No diagram')),
+                    color: Colors.black.withOpacity(0.06),
+                    blurRadius: 20,
+                    offset: const Offset(0, 12),
+                  )
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(18),
+                child: InteractiveViewer(
+                  boundaryMargin: const EdgeInsets.all(500),
+                  minScale: 0.05, // ✅ Allow more zoom out
+                  maxScale: 8.0,
+                  constrained: false,
+                  child: RepaintBoundary(
+                    key: repaintKey,
+                    child: SizedBox(
+                      width: 20000, // ✅ Increased width
+                      height: 12000, // ✅ Increased height
+                      child: root != null
+                          ? DiagramWidget(
+                              root: root!,
+                              onTapNode: _showNodeOptions,
+                              highlightedNodes: _highlightedNodes,
+                            )
+                          : const Center(child: Text('No diagram')),
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            boxShadow: [
-              BoxShadow(
+
+          // Replace the existing download button section with:
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              boxShadow: [
+                BoxShadow(
                   color: Colors.black.withOpacity(0.1),
                   blurRadius: 8,
-                  offset: const Offset(0, -2))
-            ],
-          ),
-          child: SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: _saveDiagram,
-              icon: const Icon(Icons.download_for_offline),
-              label: const Text('Generate & Download Diagram',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF1A237E),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
-                elevation: 2,
+                  offset: const Offset(0, -2),
+                )
+              ],
+            ),
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _isSaving ? null : _saveDiagram,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor:
+                      _isSaving ? Colors.grey : const Color(0xFF1976D2),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  elevation: 2,
+                ),
+                icon: _isSaving
+                    ? SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation(Colors.white),
+                        ),
+                      )
+                    : const Icon(Icons.download_for_offline),
+                label: Text(
+                  _isSaving ? 'Saving...' : 'Download Diagram',
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.bold),
+                ),
               ),
             ),
           ),
-        ),
-      ]),
+        ],
+      ),
     );
   }
 
@@ -3466,66 +3999,330 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     );
   }
 }
+// ============================================================
+// REPLACE the DiagramWidget class with this fixed version:
+// ============================================================
 
 class DiagramWidget extends StatelessWidget {
   final DiagramNode root;
   final void Function(DiagramNode) onTapNode;
-  const DiagramWidget({super.key, required this.root, required this.onTapNode});
+  final List<DiagramNode> highlightedNodes; // CHANGED to list
+
+  DiagramWidget({
+    super.key,
+    required this.root,
+    required this.onTapNode,
+    required this.highlightedNodes, // CHANGED
+  });
 
   @override
   Widget build(BuildContext context) {
     return CustomPaint(
-        painter: _DiagramPainter(root: root),
-        child: Stack(children: _overlay(root, 3000, 100)));
+      painter: _DiagramPainter(
+        root: root,
+        highlightedNodes: highlightedNodes, // CHANGED
+      ),
+      child: Stack(children: _overlay(root, 3000, 100)),
+    );
   }
 
   List<Widget> _overlay(DiagramNode node, double x, double y, {int level = 0}) {
     final widgets = <Widget>[];
 
-    // Clickable area for node
-    widgets.add(Positioned(
-        left: x - 100,
-        top: y - 50,
-        width: 200,
-        height: 100,
-        child: GestureDetector(
-            onTap: () => onTapNode(node),
-            behavior: HitTestBehavior.translucent,
-            child: Container())));
-// Add clickable area for the "add" button on leaf nodes - MOVED CLOSER
-    if (node.isLeaf && !node.isHeadend) {
-      widgets.add(Positioned(
-          left: x - 15,
-          top: y + 35, // Changed from y + 45 to y + 35
-          width: 30,
-          height: 30,
-          child: GestureDetector(
-              onTap: () => onTapNode(node),
-              behavior: HitTestBehavior.translucent,
-              child: Container())));
+    // CRITICAL FIX: Reset envelope manager at root level to sync with painter
+    if (node.isHeadend && level == 0) {
+      EnvelopeLayoutManager.reset();
     }
 
+    // Clickable area for node block itself
+    widgets.add(Positioned(
+      left: x - 70, // Increased from 100 to make it easier to click
+      top: y - 60, // Increased area
+      width: 140, // Wider clickable area
+      height: 120, // Taller clickable area
+      child: GestureDetector(
+        onTap: () => onTapNode(node),
+        behavior: HitTestBehavior.translucent,
+        child: Container(
+            // Uncomment for debugging - shows clickable areas
+            // decoration: BoxDecoration(
+            //   border: Border.all(color: Colors.red.withOpacity(0.3)),
+            // ),
+            ),
+      ),
+    ));
+
+    // Add clickable area for leaf nodes (house icon)
+    if (node.isLeaf && !node.isHeadend) {
+      widgets.add(Positioned(
+        left: x - 30, // Wider area around house
+        top: y + 60, // Positioned at house location
+        width: 60,
+        height: 80, // Cover house and text
+        child: GestureDetector(
+          onTap: () => onTapNode(node),
+          behavior: HitTestBehavior.translucent,
+          child: Container(
+              // Uncomment for debugging
+              // decoration: BoxDecoration(
+              //   border: Border.all(color: Colors.green.withOpacity(0.3)),
+              // ),
+              ),
+        ),
+      ));
+    }
+
+    // Process children with SAME logic as painter
     if (node.children.isNotEmpty) {
       final count = node.children.length;
-      final spacing =
-          BlockPositionManager.calculateOptimalSpacing(count, level);
-      final positions =
-          BlockPositionManager.distributePositions(count, x, spacing);
 
+      // Get initial X positions using the same method as painter
+      List<double> xPositions = EnvelopeLayoutManager.calculateInitialPositions(
+        count: count,
+        parentX: x,
+      );
+
+      final childBaseY = y + EnvelopeLayoutManager.verticalSpacing;
+
+      // Adjust for horizontal collisions (same as painter)
+      xPositions = EnvelopeLayoutManager.adjustForHorizontalCollisions(
+        positions: xPositions,
+        y: childBaseY,
+      );
+
+      // CRITICAL: Process children in SAME ORDER as painter
       for (int i = 0; i < count; i++) {
         final child = node.children[i];
-        final childX = positions[i];
-        final childY = y + 290;
+        final childX = xPositions[i];
+
+        // Find free Y position using SAME logic as painter
+        final childY = EnvelopeLayoutManager.findFreeY(
+          xCenter: childX,
+          preferredY: childBaseY,
+          nodeId: child.id,
+        );
+
+        // CRITICAL: Reserve space in SAME ORDER as painter
+        EnvelopeLayoutManager.reserveSpace(
+          xCenter: childX,
+          yTop: childY,
+          nodeId: child.id,
+        );
+
+        // Recursively add overlay widgets for child
         widgets.addAll(_overlay(child, childX, childY, level: level + 1));
       }
     }
+
+    // CRITICAL: Reserve space for current node (same as painter)
+    EnvelopeLayoutManager.reserveSpace(
+      xCenter: x,
+      yTop: y - EnvelopeLayoutManager.blockHeight / 2,
+      nodeId: node.id,
+    );
+
     return widgets;
   }
 }
 
 class _DiagramPainter extends CustomPainter {
   final DiagramNode root;
-  _DiagramPainter({required this.root});
+  final List<DiagramNode> highlightedNodes; // CHANGED to list
+
+  _DiagramPainter({
+    required this.root,
+    required this.highlightedNodes, // CHANGED
+  });
+
+  bool _isPathClear(
+    double startX,
+    double endX,
+    double y,
+    List<OccupiedEnvelope> zones,
+  ) {
+    final minX = startX < endX ? startX : endX;
+    final maxX = startX > endX ? startX : endX;
+
+    for (final zone in zones) {
+      // Check if line intersects with any block
+      final lineIntersectsX = !(maxX < zone.xStart || minX > zone.xEnd);
+      final lineIntersectsY = y >= zone.yTop && y <= zone.yBottom;
+
+      if (lineIntersectsX && lineIntersectsY) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void _drawRoutedConnection(
+    Canvas canvas,
+    Paint paint,
+    double startX,
+    double startY,
+    double endX,
+    double endY,
+    List<OccupiedEnvelope> zones,
+  ) {
+    // Find routing points that avoid obstacles
+    final midY = (startY + endY) / 2;
+    final routeAbove = startY - 40; // Route above obstacles
+    final routeBelow = endY + 40; // Route below obstacles
+
+    // Try routing above first
+    if (_isPathClear(startX, endX, routeAbove, zones)) {
+      // Route above obstacles
+      canvas.drawLine(
+          Offset(startX, startY), Offset(startX, routeAbove), paint);
+      canvas.drawLine(
+          Offset(startX, routeAbove), Offset(endX, routeAbove), paint);
+      canvas.drawLine(Offset(endX, routeAbove), Offset(endX, endY), paint);
+    } else if (_isPathClear(startX, endX, routeBelow, zones)) {
+      // Route below obstacles
+      canvas.drawLine(
+          Offset(startX, startY), Offset(startX, routeBelow), paint);
+      canvas.drawLine(
+          Offset(startX, routeBelow), Offset(endX, routeBelow), paint);
+      canvas.drawLine(Offset(endX, routeBelow), Offset(endX, endY), paint);
+    } else {
+      // Multi-segment routing (zigzag around obstacles)
+      _drawZigzagRoute(canvas, paint, startX, startY, endX, endY, zones);
+    }
+  }
+
+  void _drawZigzagRoute(
+    Canvas canvas,
+    Paint paint,
+    double startX,
+    double startY,
+    double endX,
+    double endY,
+    List<OccupiedEnvelope> zones,
+  ) {
+    // Find clear vertical channels
+    final segments = <Offset>[];
+    segments.add(Offset(startX, startY));
+
+    // Move vertically to intermediate level
+    final midY = (startY + endY) / 2;
+    segments.add(Offset(startX, midY));
+
+    // Move horizontally, avoiding obstacles
+    double currentX = startX;
+    final targetX = endX;
+    final step = (targetX - currentX) / 4;
+
+    for (int i = 0; i < 3; i++) {
+      currentX += step;
+
+      // Check if this X position is clear
+      bool isClear = true;
+      for (final zone in zones) {
+        if (currentX >= zone.xStart &&
+            currentX <= zone.xEnd &&
+            midY >= zone.yTop &&
+            midY <= zone.yBottom) {
+          isClear = false;
+          break;
+        }
+      }
+
+      if (isClear) {
+        segments.add(Offset(currentX, midY));
+      }
+    }
+
+    segments.add(Offset(endX, midY));
+    segments.add(Offset(endX, endY));
+
+    // Draw the segments
+    for (int i = 0; i < segments.length - 1; i++) {
+      canvas.drawLine(segments[i], segments[i + 1], paint);
+    }
+  }
+
+  void _drawSmartConnection(
+    Canvas canvas,
+    double parentX,
+    double parentY,
+    double childX,
+    double childY,
+    DiagramNode child,
+  ) {
+    final paintLine = Paint()
+      ..color = const Color(0xFF424242)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5;
+
+    final trunkY = parentY + 45;
+    final splitY = parentY + 165;
+    final blockTop = childY - 55;
+
+    final zones = EnvelopeLayoutManager.getOccupiedZones();
+
+    // Vertical line from parent
+    canvas.drawLine(
+        Offset(parentX, trunkY), Offset(parentX, splitY), paintLine);
+
+    final horizontalPath = _isPathClear(parentX, childX, splitY, zones);
+
+    if (horizontalPath) {
+      // Direct horizontal connection
+      canvas.drawLine(
+          Offset(parentX, splitY), Offset(childX, splitY), paintLine);
+      canvas.drawLine(
+          Offset(childX, splitY), Offset(childX, blockTop), paintLine);
+    } else {
+      // Route around obstacles
+      _drawRoutedConnection(
+          canvas, paintLine, parentX, splitY, childX, blockTop, zones);
+    }
+
+    // ✅ FIX: Draw arrow at END of line (at child block top)
+    final arrowPath = Path();
+    arrowPath.moveTo(childX, blockTop);
+    arrowPath.lineTo(childX - 5, blockTop - 8);
+    arrowPath.lineTo(childX + 5, blockTop - 8);
+    arrowPath.close();
+
+    canvas.drawPath(
+      arrowPath,
+      Paint()
+        ..color = const Color(0xFF1976D2)
+        ..style = PaintingStyle.fill,
+    );
+
+    // Draw distance label
+    if (child.distance > 0) {
+      String distanceText = child.distance < 1.0
+          ? '${(child.distance * 1000).toStringAsFixed(0)}m'
+          : '${child.distance.toStringAsFixed(2)}km';
+
+      final distanceTp =
+          _text(distanceText, 10, Colors.white, fontWeight: FontWeight.bold);
+      final bgRect = Rect.fromCenter(
+        center: Offset(childX, splitY),
+        width: distanceTp.width + 16,
+        height: 20,
+      );
+
+      final gradient = const LinearGradient(
+        colors: [Color(0xFF1976D2), Color(0xFF0D47A1)],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+      );
+
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(bgRect, const Radius.circular(10)),
+        Paint()..shader = gradient.createShader(bgRect),
+      );
+
+      distanceTp.paint(
+        canvas,
+        Offset(childX - distanceTp.width / 2, splitY - distanceTp.height / 2),
+      );
+    }
+  }
 
   @override
   void paint(Canvas canvas, Size size) => _draw(canvas, root, 3000, 100);
@@ -3533,90 +4330,46 @@ class _DiagramPainter extends CustomPainter {
 
   void _draw(Canvas canvas, DiagramNode node, double x, double y,
       {int level = 0}) {
+    if (node.isHeadend && level == 0) {
+      EnvelopeLayoutManager.reset();
+    }
+
     if (node.children.isNotEmpty) {
       final count = node.children.length;
-      final spacing =
-          BlockPositionManager.calculateOptimalSpacing(count, level);
+      List<double> xPositions = EnvelopeLayoutManager.calculateInitialPositions(
+        count: count,
+        parentX: x,
+      );
 
-      // Calculate initial positions
-      List<double> positions =
-          BlockPositionManager.distributePositions(count, x, spacing);
-
-      // CRITICAL FIX: Track ALL positions at this level globally
-      // This prevents overlaps when multiple parents have children at same level
-      Map<int, List<double>> levelPositions = {};
-
-      // Collect all existing positions at the child level
-      _collectPositionsAtLevel(
-          node, y + BlockPositionManager.verticalSpacing, levelPositions);
-
-      // Adjust positions to avoid collisions with ALL blocks at this level
-      for (int i = 0; i < count; i++) {
-        double desiredX = positions[i];
-        List<double> existingAtLevel = levelPositions[level + 1] ?? [];
-
-        // Find available position considering ALL blocks at this level
-        positions[i] = BlockPositionManager.findAvailablePosition(
-            desiredX, existingAtLevel);
-
-        // Add this position to the level tracker
-        if (levelPositions[level + 1] == null) {
-          levelPositions[level + 1] = [];
-        }
-        levelPositions[level + 1]!.add(positions[i]);
-      }
+      final childBaseY = y + EnvelopeLayoutManager.verticalSpacing;
+      xPositions = EnvelopeLayoutManager.adjustForHorizontalCollisions(
+        positions: xPositions,
+        y: childBaseY,
+      );
 
       for (int i = 0; i < count; i++) {
-        DiagramNode child = node.children[i];
-        double childX = positions[i];
-        final childY = y + BlockPositionManager.verticalSpacing;
+        final child = node.children[i];
+        final childX = xPositions[i];
+        final childY = EnvelopeLayoutManager.findFreeY(
+          xCenter: childX,
+          preferredY: childBaseY,
+          nodeId: child.id,
+        );
 
-        // Draw connecting lines
-        final paintLine = Paint()
-          ..color = const Color(0xFF424242)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.5;
+        EnvelopeLayoutManager.reserveSpace(
+          xCenter: childX,
+          yTop: childY,
+          nodeId: child.id,
+        );
 
-        canvas.drawLine(Offset(x, y + 45), Offset(x, y + 165), paintLine);
-        canvas.drawLine(Offset(x, y + 165), Offset(childX, y + 165), paintLine);
-        canvas.drawLine(
-            Offset(childX, y + 165), Offset(childX, childY - 55), paintLine);
+        // SMART LINE DRAWING - Avoid blocks
+        _drawSmartConnection(canvas, x, y, childX, childY, child);
 
-        // Draw distance label if applicable
-        if (child.distance > 0) {
-          String distanceText = child.distance < 1.0
-              ? '${(child.distance * 1000).toStringAsFixed(0)}m'
-              : '${child.distance.toStringAsFixed(2)}km';
-
-          final distanceTp = _text(distanceText, 10, Colors.white,
-              fontWeight: FontWeight.bold);
-          final bgRect = Rect.fromCenter(
-              center: Offset(childX, y + 165),
-              width: distanceTp.width + 16,
-              height: 20);
-
-          final gradient = LinearGradient(
-            colors: [const Color(0xFF1976D2), const Color(0xFF0D47A1)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          );
-
-          canvas.drawRRect(
-              RRect.fromRectAndRadius(bgRect, const Radius.circular(10)),
-              Paint()..shader = gradient.createShader(bgRect));
-
-          distanceTp.paint(
-              canvas,
-              Offset(childX - distanceTp.width / 2,
-                  y + 165 - distanceTp.height / 2));
-        }
-
-        // Recursively draw child with level tracking
         _draw(canvas, child, childX, childY, level: level + 1);
       }
     }
 
-    // Draw the current node block
+    // Draw current node
     if (node.isHeadend) {
       _drawHeadendBlock(canvas, x, y, node);
     } else if (node.isCouplerOutput) {
@@ -3627,32 +4380,147 @@ class _DiagramPainter extends CustomPainter {
       _drawStandardBlock(canvas, x, y, node);
     }
 
-    // Draw house icon for leaf nodes
+    EnvelopeLayoutManager.reserveSpace(
+      xCenter: x,
+      yTop: y - EnvelopeLayoutManager.blockHeight / 2,
+      nodeId: node.id,
+    );
+
     if (node.isLeaf && !node.isHeadend) {
       _drawHouseIcon(canvas, Offset(x, y + 100), node);
     }
   }
 
-// Add this helper method to collect all positions at a specific level
+  void _drawConnectionLines(Canvas canvas, double parentX, double parentY,
+      double childX, double childY, DiagramNode child) {
+    final paintLine = Paint()
+      ..color = const Color(0xFF424242)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5;
+
+    // Calculate key points
+    final trunkY = parentY + 45;
+    final splitY = parentY + 165;
+    final childTop = childY - 55; // Top of child block
+
+    // Determine if we need to route around other blocks
+    double safeSplitY = splitY;
+
+    // Check if direct horizontal line would intersect any occupied space
+    final occupiedZones = EnvelopeLayoutManager.getOccupiedZones();
+    final lineMinY = splitY - 10;
+    final lineMaxY = splitY + 10;
+
+    bool hasCollision = false;
+    for (final zone in occupiedZones) {
+      if (zone.nodeId == child.id) continue; // Skip the child's own zone
+
+      // Check if horizontal line would intersect this zone
+      final lineLeft = math.min(parentX, childX);
+      final lineRight = math.max(parentX, childX);
+
+      if (zone.overlapsWith(lineLeft, lineRight, lineMinY, lineMaxY)) {
+        hasCollision = true;
+        break;
+      }
+    }
+
+    // If collision, adjust splitY to go above/below the blocking zone
+    if (hasCollision) {
+      safeSplitY = splitY - 40; // Move horizontal line higher
+    }
+
+    // Draw vertical line from parent to split point
+    canvas.drawLine(
+        Offset(parentX, trunkY), Offset(parentX, safeSplitY), paintLine);
+
+    // Draw horizontal line from parent to child
+    canvas.drawLine(
+        Offset(parentX, safeSplitY), Offset(childX, safeSplitY), paintLine);
+
+    // Draw vertical line from horizontal line to child
+    canvas.drawLine(
+        Offset(childX, safeSplitY), Offset(childX, childTop), paintLine);
+
+    // Add small arrow or circle at connection point to child
+    canvas.drawCircle(
+        Offset(childX, childTop), 4, Paint()..color = const Color(0xFF1976D2));
+  }
+
+// Replace the _findFreeY method in _DiagramPainter:
+  double _findFreeY({
+    required double xStart,
+    required double xEnd,
+    required double preferredY,
+    required double height,
+  }) {
+    const double step = 20.0;
+    double y = preferredY;
+
+    // Use EnvelopeLayoutManager instead of _occupied
+    final occupiedZones = EnvelopeLayoutManager.getOccupiedZones();
+
+    while (true) {
+      final collision = occupiedZones.any((e) {
+        final xOverlap = !(xEnd < e.xStart || xStart > e.xEnd);
+        final yOverlap = !(y + height < e.yTop || y > e.yBottom);
+        return xOverlap && yOverlap;
+      });
+
+      if (!collision) {
+        return y;
+      }
+      y += step;
+    }
+  }
+
   void _collectPositionsAtLevel(
       DiagramNode node, double targetY, Map<int, List<double>> levelPositions,
       {double currentY = 100, int level = 0}) {
-    // This is a separate tree traversal that builds a map of all X positions at each Y level
-    // This prevents blocks from different parents from overlapping
-
     if (node.children.isNotEmpty) {
       for (var child in node.children) {
-        double childY = currentY + BlockPositionManager.verticalSpacing;
+        double childY = currentY + EnvelopeLayoutManager.verticalSpacing;
 
         // Store this child's future position
         if (levelPositions[level + 1] == null) {
           levelPositions[level + 1] = [];
         }
 
+        // Get the actual X position by simulating the layout
+        final count = node.children.length;
+        List<double> xPositions =
+            EnvelopeLayoutManager.calculateInitialPositions(
+          count: count,
+          parentX: 0, // We'll calculate relative positions
+        );
+
+        // Adjust indices to match actual positions
+        int childIndex = node.children.indexOf(child);
+        if (childIndex < xPositions.length) {
+          levelPositions[level + 1]!.add(xPositions[childIndex]);
+        }
+
         _collectPositionsAtLevel(child, targetY, levelPositions,
             currentY: childY, level: level + 1);
       }
     }
+  }
+
+  bool _lineWouldIntersectBlock(
+      double x1, double x2, double y, double thickness) {
+    final occupiedZones = EnvelopeLayoutManager.getOccupiedZones();
+    final lineY1 = y - thickness / 2;
+    final lineY2 = y + thickness / 2;
+    final lineLeft = math.min(x1, x2);
+    final lineRight = math.max(x1, x2);
+
+    for (final zone in occupiedZones) {
+      // Check if line overlaps with zone
+      if (zone.overlapsWith(lineLeft, lineRight, lineY1, lineY2)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   void _drawHeadendBlock(Canvas canvas, double x, double y, DiagramNode node) {
@@ -3732,9 +4600,8 @@ class _DiagramPainter extends CustomPainter {
 
   void _drawCouplerBlock(Canvas canvas, double x, double y, DiagramNode node) {
     final blockWidth = 120.0;
-    final blockHeight = node.useWdm && node.wdmOutputPower != 0.0
-        ? 105.0
-        : 90.0; // Dynamic height
+    final blockHeight =
+        node.useWdm && node.wdmOutputPower != 0.0 ? 105.0 : 90.0;
     final headerHeight = 22.0;
 
     // Shadow
@@ -3749,14 +4616,12 @@ class _DiagramPainter extends CustomPainter {
           ..color = const Color(0x33000000)
           ..style = PaintingStyle.fill);
 
-    // Main block
     final mainRect = RRect.fromRectAndRadius(
       Rect.fromCenter(
           center: Offset(x, y), width: blockWidth, height: blockHeight),
       const Radius.circular(6),
     );
 
-    // Header gradient
     final headerRect = RRect.fromRectAndRadius(
       Rect.fromCenter(
           center: Offset(x, y - blockHeight / 2 + headerHeight / 2),
@@ -3764,144 +4629,9 @@ class _DiagramPainter extends CustomPainter {
           height: headerHeight),
       const Radius.circular(6),
     );
+
     final headerGradient = const LinearGradient(
       colors: [Color(0xFFFF8F00), Color(0xFFEF6C00)],
-      begin: Alignment.topLeft,
-      end: Alignment.bottomRight,
-    );
-    canvas.drawRRect(
-        headerRect,
-        Paint()
-          ..shader = headerGradient.createShader(Rect.fromCenter(
-            center: Offset(x, y - blockHeight / 2 + headerHeight / 2),
-            width: blockWidth,
-            height: headerHeight,
-          )));
-
-    // Body
-    canvas.drawRRect(
-        mainRect,
-        Paint()
-          ..color = Colors.white
-          ..style = PaintingStyle.fill);
-    canvas.drawRRect(
-        mainRect,
-        Paint()
-          ..color = const Color(0xFFFF8F00)
-          ..style = PaintingStyle.stroke // Fix: PaintingStyle.stroke
-          ..strokeWidth = 2.0);
-
-    // HEADER: Display user-entered label (e.g., "abc1")
-
-    // BODY CONTENT: Display in order - Ratio, Input dBm, WDM Power, Final Power
-    double contentY = y - 22; // Start higher to fit 4 lines
-
-    // BODY CONTENT: Display in order - Ratio, Input dBm, Final Power
-
-    final label = node.label.isEmpty ? 'Coupler' : node.label;
-    final nameTp = _text(label, 10, Colors.white, fontWeight: FontWeight.bold);
-
-    if (nameTp.width > blockWidth - 10) {
-      final shorterTp =
-          _text(label, 8, Colors.white, fontWeight: FontWeight.bold);
-      shorterTp.paint(
-          canvas,
-          Offset(x - shorterTp.width / 2,
-              y - blockHeight / 2 + headerHeight / 2 - shorterTp.height / 2));
-    } else {
-      nameTp.paint(
-          canvas,
-          Offset(x - nameTp.width / 2,
-              y - blockHeight / 2 + headerHeight / 2 - nameTp.height / 2));
-    }
-// 1. Ratio (e.g., "30")
-    final sideRatio = node.couplerRatio ?? 50;
-    final ratioTp = _text('$sideRatio', 13, const Color(0xFFEF6C00),
-        fontWeight: FontWeight.bold);
-    ratioTp.paint(canvas, Offset(x - ratioTp.width / 2, contentY));
-
-    contentY += 16;
-
-// 2. Input Power (parent's signal before losses)
-    final inputPowerText =
-        'In: ${_getParentPower(node).toStringAsFixed(1)} dBm';
-    final inputTp =
-        _text(inputPowerText, 8, Colors.black54, fontWeight: FontWeight.w500);
-    inputTp.paint(canvas, Offset(x - inputTp.width / 2, contentY));
-
-    contentY += 14;
-
-// 3. WDM Power (if enabled)
-    if (node.useWdm && node.wdmOutputPower != 0.0) {
-      final wdmText = 'WDM: ${node.wdmOutputPower.toStringAsFixed(1)} dBm';
-      final wdmTp = _text(wdmText, 8, Colors.orange.shade700,
-          fontWeight: FontWeight.w600);
-      wdmTp.paint(canvas, Offset(x - wdmTp.width / 2, contentY));
-      contentY += 14;
-    }
-
-// 4. Final Output Power
-    final finalPower = node.signal;
-    final powerTp = _text('${finalPower.toStringAsFixed(1)} dBm', 11,
-        const Color.fromARGB(255, 99, 114, 243),
-        fontWeight: FontWeight.bold);
-    powerTp.paint(canvas, Offset(x - powerTp.width / 2, contentY));
-  }
-
-// Helper method to get parent power (add this near other helper methods)
-  double _getParentPower(DiagramNode node) {
-    // For coupler output, we need to find the parent's signal
-    // The parent signal is stored before coupler loss is applied
-    if (node.parentId != null) {
-      final parent = _findNodeInTree(root, node.parentId!);
-      if (parent != null) {
-        return parent.signal;
-      }
-    }
-    return 0.0;
-  }
-
-  DiagramNode? _findNodeInTree(DiagramNode? current, int targetId) {
-    if (current == null) return null;
-    if (current.id == targetId) return current;
-    for (var child in current.children) {
-      final found = _findNodeInTree(child, targetId);
-      if (found != null) return found;
-    }
-    return null;
-  }
-
-  void _drawSplitterBlock(Canvas canvas, double x, double y, DiagramNode node) {
-    final blockWidth = 120.0;
-    final blockHeight = 90.0; // Increased height
-    final headerHeight = 22.0;
-
-    // Shadow
-    final shadowRect = RRect.fromRectAndRadius(
-      Rect.fromCenter(
-          center: Offset(x + 2, y + 4), width: blockWidth, height: blockHeight),
-      const Radius.circular(6),
-    );
-    canvas.drawRRect(
-        shadowRect,
-        Paint()
-          ..color = const Color(0x33000000)
-          ..style = PaintingStyle.fill);
-
-    final mainRect = RRect.fromRectAndRadius(
-        Rect.fromCenter(
-            center: Offset(x, y), width: blockWidth, height: blockHeight),
-        const Radius.circular(6));
-
-    final headerRect = RRect.fromRectAndRadius(
-        Rect.fromCenter(
-            center: Offset(x, y - blockHeight / 2 + headerHeight / 2),
-            width: blockWidth,
-            height: headerHeight),
-        const Radius.circular(6));
-
-    final headerGradient = LinearGradient(
-      colors: [Color(0xFF7B1FA2), Color(0xFF4A148C)],
       begin: Alignment.topLeft,
       end: Alignment.bottomRight,
     );
@@ -3922,20 +4652,16 @@ class _DiagramPainter extends CustomPainter {
     canvas.drawRRect(
         mainRect,
         Paint()
-          ..color = Color(0xFF7B1FA2)
+          ..color = const Color(0xFFFF8F00)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 2.0);
 
-    // BODY: Display in order - Split Ratio, Input dBm, Final Power
-    double contentY = y - 18;
-    // HEADER: Display user-entered label
-    final displayName = node.label.isEmpty ? 'Splitter' : node.label;
-    final nameTp =
-        _text(displayName, 10, Colors.white, fontWeight: FontWeight.bold);
+    final label = node.label.isEmpty ? 'Coupler' : node.label;
+    final nameTp = _text(label, 10, Colors.white, fontWeight: FontWeight.bold);
 
     if (nameTp.width > blockWidth - 10) {
       final shorterTp =
-          _text(displayName, 8, Colors.white, fontWeight: FontWeight.bold);
+          _text(label, 8, Colors.white, fontWeight: FontWeight.bold);
       shorterTp.paint(
           canvas,
           Offset(x - shorterTp.width / 2,
@@ -3947,7 +4673,141 @@ class _DiagramPainter extends CustomPainter {
               y - blockHeight / 2 + headerHeight / 2 - nameTp.height / 2));
     }
 
-    // 1. Split ratio (e.g., "1x2")
+    double contentY = y - 22;
+    final sideRatio = node.couplerRatio ?? 50;
+    final ratioTp = _text('$sideRatio', 13, const Color(0xFFEF6C00),
+        fontWeight: FontWeight.bold);
+    ratioTp.paint(canvas, Offset(x - ratioTp.width / 2, contentY));
+
+    contentY += 16;
+    final inputPowerText =
+        'In: ${_getParentPower(node).toStringAsFixed(1)} dBm';
+    final inputTp =
+        _text(inputPowerText, 8, Colors.black54, fontWeight: FontWeight.w500);
+    inputTp.paint(canvas, Offset(x - inputTp.width / 2, contentY));
+
+    contentY += 14;
+    if (node.useWdm && node.wdmOutputPower != 0.0) {
+      final wdmText = 'WDM: ${node.wdmOutputPower.toStringAsFixed(1)} dBm';
+      final wdmTp = _text(wdmText, 8, Colors.orange.shade700,
+          fontWeight: FontWeight.w600);
+      wdmTp.paint(canvas, Offset(x - wdmTp.width / 2, contentY));
+      contentY += 14;
+    }
+
+    final finalPower = node.signal;
+    final powerTp = _text('${finalPower.toStringAsFixed(1)} dBm', 11,
+        const Color.fromARGB(255, 99, 114, 243),
+        fontWeight: FontWeight.bold);
+    powerTp.paint(canvas, Offset(x - powerTp.width / 2, contentY));
+  }
+
+// Helper method to get parent power (add this near other helper methods)
+  double _getParentPower(DiagramNode node) {
+    // For coupler output, we need to find the parent's signal
+    // The parent signal is stored before coupler loss is applied
+    if (node.parentId != null) {
+      final parent = _findNodeInTree(root, node.parentId!);
+      if (parent != null) {
+        return parent.signal;
+      }
+    }
+    return 0.0;
+  }
+
+  // Add this method to _DiagramPainter class:
+  DiagramNode? _findNodeInTree(DiagramNode? current, int targetId) {
+    if (current == null) return null;
+    if (current.id == targetId) return current;
+    for (var child in current.children) {
+      final found = _findNodeInTree(child, targetId);
+      if (found != null) return found;
+    }
+    return null;
+  }
+
+  void _drawSplitterBlock(Canvas canvas, double x, double y, DiagramNode node) {
+    final blockWidth = 120.0;
+    final blockHeight =
+        node.useWdm && node.wdmOutputPower != 0.0 ? 105.0 : 90.0;
+    final headerHeight = 22.0;
+
+    final shadowRect = RRect.fromRectAndRadius(
+      Rect.fromCenter(
+          center: Offset(x + 2, y + 4), width: blockWidth, height: blockHeight),
+      const Radius.circular(6),
+    );
+    canvas.drawRRect(
+        shadowRect,
+        Paint()
+          ..color = const Color(0x33000000)
+          ..style = PaintingStyle.fill);
+
+    final mainRect = RRect.fromRectAndRadius(
+      Rect.fromCenter(
+          center: Offset(x, y), width: blockWidth, height: blockHeight),
+      const Radius.circular(6),
+    );
+
+    final headerRect = RRect.fromRectAndRadius(
+      Rect.fromCenter(
+          center: Offset(x, y - blockHeight / 2 + headerHeight / 2),
+          width: blockWidth,
+          height: headerHeight),
+      const Radius.circular(6),
+    );
+
+    final headerGradient = const LinearGradient(
+      colors: [Color(0xFF7B1FA2), Color(0xFF4A148C)],
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+    );
+
+    canvas.drawRRect(
+      headerRect,
+      Paint()
+        ..shader = headerGradient.createShader(Rect.fromCenter(
+          center: Offset(x, y - blockHeight / 2 + headerHeight / 2),
+          width: blockWidth,
+          height: headerHeight,
+        )),
+    );
+
+    canvas.drawRRect(
+        mainRect,
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.fill);
+    canvas.drawRRect(
+        mainRect,
+        Paint()
+          ..color = const Color(0xFF7B1FA2)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.0);
+
+    // ❌ REMOVED ARROW - arrows now only at line ends
+
+    double contentY = y - 22;
+    final displayName = node.label.isEmpty ? 'Splitter' : node.label;
+    final nameTp =
+        _text(displayName, 10, Colors.white, fontWeight: FontWeight.bold);
+
+    if (nameTp.width > blockWidth - 10) {
+      final shorterTp =
+          _text(displayName, 8, Colors.white, fontWeight: FontWeight.bold);
+      shorterTp.paint(
+        canvas,
+        Offset(x - shorterTp.width / 2,
+            y - blockHeight / 2 + headerHeight / 2 - shorterTp.height / 2),
+      );
+    } else {
+      nameTp.paint(
+        canvas,
+        Offset(x - nameTp.width / 2,
+            y - blockHeight / 2 + headerHeight / 2 - nameTp.height / 2),
+      );
+    }
+
     String splitInfo = '1x?';
     if (node.deviceConfig != null) {
       final parts = node.deviceConfig!.split('::');
@@ -3956,25 +4816,30 @@ class _DiagramPainter extends CustomPainter {
         splitInfo = '1x$split';
       }
     }
-    final splitTp =
-        _text(splitInfo, 13, Color(0xFF7B1FA2), fontWeight: FontWeight.bold);
+    final splitTp = _text(splitInfo, 13, const Color(0xFF7B1FA2),
+        fontWeight: FontWeight.bold);
     splitTp.paint(canvas, Offset(x - splitTp.width / 2, contentY));
 
-    contentY += 18;
-
-    // 2. Input Power (parent's signal)
+    contentY += 16;
     final inputPowerText =
         'In: ${_getParentPower(node).toStringAsFixed(1)} dBm';
     final inputTp =
-        _text(inputPowerText, 9, Colors.black54, fontWeight: FontWeight.w500);
+        _text(inputPowerText, 8, Colors.black54, fontWeight: FontWeight.w500);
     inputTp.paint(canvas, Offset(x - inputTp.width / 2, contentY));
 
-    contentY += 16;
+    contentY += 14;
 
-    // 3. Final Output Power
+    if (node.useWdm && node.wdmOutputPower != 0.0) {
+      final wdmText = 'WDM: ${node.wdmOutputPower.toStringAsFixed(1)} dBm';
+      final wdmTp = _text(wdmText, 8, Colors.purple.shade700,
+          fontWeight: FontWeight.w600);
+      wdmTp.paint(canvas, Offset(x - wdmTp.width / 2, contentY));
+      contentY += 14;
+    }
+
     final finalPower = node.signal;
     final powerTp = _text('${finalPower.toStringAsFixed(1)} dBm', 11,
-        const ui.Color.fromARGB(255, 96, 116, 229),
+        const Color.fromARGB(255, 96, 116, 229),
         fontWeight: FontWeight.bold);
     powerTp.paint(canvas, Offset(x - powerTp.width / 2, contentY));
   }
@@ -4054,9 +4919,25 @@ class _DiagramPainter extends CustomPainter {
     powerTp.paint(canvas, Offset(x - powerTp.width / 2, y + 5));
   }
 
+  // Update _drawHouseIcon to check if node is in highlighted list
   void _drawHouseIcon(Canvas canvas, Offset center, DiagramNode node) {
     final c = center;
 
+    // ✅ HIGHLIGHT ALL MATCHING NODES
+    if (highlightedNodes.any((n) => n.id == node.id)) {
+      // Draw pulsing highlight circle
+      final highlightPaint = Paint()
+        ..color = Colors.yellow.withOpacity(0.3)
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(Offset(c.dx, c.dy), 35, highlightPaint);
+
+      // Draw highlight border
+      final borderPaint = Paint()
+        ..color = Colors.yellow
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3;
+      canvas.drawCircle(Offset(c.dx, c.dy), 35, borderPaint);
+    }
     /* ---------- Soft Shadow ---------- */
     canvas.drawOval(
       Rect.fromCenter(
