@@ -14,8 +14,6 @@ import 'dart:convert';
 import 'dart:ui' as ui;
 import 'package:flutter/rendering.dart';
 import 'package:image/image.dart' as img;
-import '../../utils/diagram_navigation.dart';
-import '../../utils/diagram_svg_export.dart';
 
 // ---------------- Helper Functions ----------------
 const double ln10 = 2.302585092994046;
@@ -3165,18 +3163,64 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     setState(() => _isSaving = true);
 
     try {
-      // 1. Capture the RepaintBoundary
-      final boundary = repaintKey.currentContext!.findRenderObject()
-          as RenderRepaintBoundary;
-      final image = await boundary.toImage(pixelRatio: 2.0);
+      // ✅ Calculate FULL bounds (no viewport dependency)
+      final bounds = calculateBounds(root!);
+      final padding = 50.0;
+
+      // ✅ Create OFFSCREEN canvas
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+
+      // ✅ White background
+      canvas.drawRect(
+        Rect.fromLTWH(
+            0, 0, bounds.width + padding * 2, bounds.height + padding * 2),
+        Paint()..color = Colors.white,
+      );
+
+      // ✅ Shift diagram to account for padding
+      canvas.translate(padding - bounds.left, padding - bounds.top);
+
+      // ✅ Draw diagram using SAME painter logic
+      final painter = _DiagramPainter(
+        root: root!,
+        highlightedNodes: [],
+      );
+
+      painter.paint(canvas,
+          Size(bounds.width + padding * 2, bounds.height + padding * 2));
+
+      // ✅ Convert to PNG
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(
+        (bounds.width + padding * 2).ceil(),
+        (bounds.height + padding * 2).ceil(),
+      );
+
       final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
       final pngBytes = byteData!.buffer.asUint8List();
 
-      // 2. Generate thumbnail (300x300)
-      final fullImage = img.decodeImage(pngBytes);
-      if (fullImage == null) throw Exception('Failed to decode image');
+      // ✅ Validate image
+      if (pngBytes.isEmpty || pngBytes.length < 1000) {
+        throw Exception(
+            'Generated image is too small (${pngBytes.length} bytes)');
+      }
 
-      final thumbnail = img.copyResize(fullImage, width: 300, height: 300);
+      print('✅ Canva-style export: ${pngBytes.length} bytes');
+
+      // ✅ Decode and create thumbnail
+      final fullImage = img.decodeImage(pngBytes);
+      if (fullImage == null) {
+        throw Exception('Failed to decode image');
+      }
+
+      final thumbnailSize = 300;
+      final thumbnail = img.copyResize(
+        fullImage,
+        width: thumbnailSize,
+        height: thumbnailSize,
+        interpolation: img.Interpolation.linear,
+      );
       final thumbnailBytes = Uint8List.fromList(img.encodePng(thumbnail));
 
       final timestamp = DateTime.now().millisecondsSinceEpoch;
@@ -3186,8 +3230,8 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       String? fullImagePath;
       String? thumbnailPath;
 
+      // ✅ Save to storage
       if (kIsWeb) {
-        // Web download
         final blob = html.Blob([pngBytes], 'image/png');
         final url = html.Url.createObjectUrlFromBlob(blob);
         final anchor = html.AnchorElement(href: url)
@@ -3195,30 +3239,30 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
           ..click();
         html.Url.revokeObjectUrl(url);
       } else {
-        // Mobile save
         Directory dir;
-        final possible = Directory('/storage/emulated/0/Download');
-        if (await possible.exists()) {
-          dir = possible;
-        } else {
+        try {
+          final externalDir = Directory('/storage/emulated/0/Download');
+          if (await externalDir.exists()) {
+            dir = externalDir;
+          } else {
+            dir = await getApplicationDocumentsDirectory();
+          }
+        } catch (e) {
           dir = await getApplicationDocumentsDirectory();
         }
 
-        // Save full image
         final fullFile = File('${dir.path}/$fileName');
         await fullFile.writeAsBytes(pngBytes);
         fullImagePath = fullFile.path;
 
-        // Save thumbnail
         final thumbFile = File('${dir.path}/$thumbFileName');
         await thumbFile.writeAsBytes(thumbnailBytes);
         thumbnailPath = thumbFile.path;
 
-        print('✅ Saved full image: $fullImagePath');
-        print('✅ Saved thumbnail: $thumbnailPath');
+        print('✅ Saved: $fullImagePath (${pngBytes.length} bytes)');
       }
 
-      // 3. Save to Hive with both paths
+      // ✅ Save to Hive
       final downloadsBox = await Hive.openBox('diagram_downloads');
       await downloadsBox.add({
         'name': _projectName ??
@@ -3227,7 +3271,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
         'date': DateTime.now().toIso8601String(),
         'type': 'png',
         'path': fullImagePath,
-        'thumbnailPath': thumbnailPath, // ✅ CRITICAL: Save thumbnail path
+        'thumbnailPath': thumbnailPath,
         'cloudUrl': null,
         'headendName': _headendNameCtrl.text,
         'headendPower':
@@ -3248,7 +3292,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                 SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    '✅ Diagram saved successfully!\nFull image and thumbnail created.',
+                    '✅ Diagram saved successfully!',
                     style: TextStyle(fontWeight: FontWeight.w600),
                   ),
                 ),
@@ -3259,8 +3303,8 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
           ),
         );
       }
-    } catch (e) {
-      print('❌ Save error: $e');
+    } catch (e, stack) {
+      print('❌ Save error: $e\n$stack');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -3277,72 +3321,88 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     }
   }
 
-// Add this helper method
-  void _showError(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        duration: const Duration(seconds: 6),
-        backgroundColor: Colors.red,
-        action: SnackBarAction(
-          label: 'OK',
-          textColor: Colors.white,
-          onPressed: () {},
-        ),
-      ),
-    );
-  }
-
-// Add this helper method to calculate diagram bounds
-  Size _calculateDiagramSize(DiagramNode root) {
+  Rect calculateBounds(DiagramNode root) {
     double minX = double.infinity;
-    double maxX = double.negativeInfinity;
     double minY = double.infinity;
-    double maxY = double.negativeInfinity;
+    double maxX = 0;
+    double maxY = 0;
 
-    void traverse(DiagramNode node, double x, double y) {
-      // Update bounds with generous padding
-      minX = math.min(minX, x - 150);
-      maxX = math.max(maxX, x + 150);
-      minY = math.min(minY, y - 150);
-      maxY = math.max(maxY, y + 250); // Extra space for house icons
+    void walk(DiagramNode n, double x, double y, {int level = 0}) {
+      if (n.isHeadend && level == 0) {
+        EnvelopeLayoutManager.reset();
+      }
 
-      // Process children
-      if (node.children.isNotEmpty) {
-        final count = node.children.length;
-        final xPositions = EnvelopeLayoutManager.calculateInitialPositions(
+      // Track this node's position
+      minX = minX < x - 100 ? minX : x - 100;
+      minY = minY < y - 80 ? minY : y - 80;
+      maxX = maxX > x + 100 ? maxX : x + 100;
+      maxY = maxY > y + 150 ? maxY : y + 150;
+
+      // Process children with SAME layout logic as painter
+      if (n.children.isNotEmpty) {
+        final count = n.children.length;
+        List<double> xPositions =
+            EnvelopeLayoutManager.calculateInitialPositions(
           count: count,
           parentX: x,
         );
 
         final childBaseY = y + EnvelopeLayoutManager.verticalSpacing;
-        final adjustedPositions =
-            EnvelopeLayoutManager.adjustForHorizontalCollisions(
+        xPositions = EnvelopeLayoutManager.adjustForHorizontalCollisions(
           positions: xPositions,
           y: childBaseY,
         );
 
         for (int i = 0; i < count; i++) {
-          final child = node.children[i];
-          final childX = adjustedPositions[i];
+          final child = n.children[i];
+          final childX = xPositions[i];
           final childY = EnvelopeLayoutManager.findFreeY(
             xCenter: childX,
             preferredY: childBaseY,
             nodeId: child.id,
           );
 
-          traverse(child, childX, childY);
+          EnvelopeLayoutManager.reserveSpace(
+            xCenter: childX,
+            yTop: childY,
+            nodeId: child.id,
+          );
+
+          walk(child, childX, childY, level: level + 1);
         }
       }
+
+      EnvelopeLayoutManager.reserveSpace(
+        xCenter: x,
+        yTop: y - EnvelopeLayoutManager.blockHeight / 2,
+        nodeId: n.id,
+      );
     }
 
-    EnvelopeLayoutManager.reset();
-    traverse(root, 3000, 100);
+    walk(root, 3000, 100);
 
-    return Size(
-      maxX - minX + 300, // Extra padding
-      maxY - minY + 300,
-    );
+    return Rect.fromLTRB(minX, minY, maxX, maxY);
+  }
+
+  Future<void> _verifyImageFile(String path) async {
+    try {
+      final file = File(path);
+      if (await file.exists()) {
+        final bytes = await file.readAsBytes();
+        final img.Image? decodedImage = img.decodeImage(bytes);
+
+        if (decodedImage != null) {
+          print(
+              '✅ File verified: ${decodedImage.width}x${decodedImage.height}, ${bytes.length} bytes');
+        } else {
+          print('❌ File exists but cannot be decoded as image');
+        }
+      } else {
+        print('❌ File does not exist at: $path');
+      }
+    } catch (e) {
+      print('❌ Error verifying file: $e');
+    }
   }
 
   @override
@@ -3396,23 +3456,6 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       print('Cloud upload error: $e');
       return null;
     }
-  }
-
-  // Add this method to _OFCDiagramPageState class
-  Future<void> _zoomOutAndSave() async {
-    // First show a message about zooming out
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Auto-zooming out to capture entire diagram...'),
-        duration: Duration(seconds: 2),
-      ),
-    );
-
-    // Wait a bit for the message to be seen
-    await Future.delayed(const Duration(milliseconds: 500));
-
-    // Now save the diagram
-    await _saveDiagram();
   }
 
   @override
