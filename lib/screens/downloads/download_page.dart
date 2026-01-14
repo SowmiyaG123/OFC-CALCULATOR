@@ -128,19 +128,6 @@ class _DownloadsPageState extends State<DownloadsPage> {
     String? localPath,
     String? cloudUrl,
   ) {
-    // Get thumbnail from the saved data
-    final box = Hive.box('diagram_downloads');
-    String? thumbnailPath;
-
-    for (var item in box.values) {
-      final data = item as Map;
-      if ((data['path'] == localPath || data['cloudUrl'] == cloudUrl) &&
-          data['thumbnailPath'] != null) {
-        thumbnailPath = data['thumbnailPath'];
-        break;
-      }
-    }
-
     showDialog(
       context: context,
       builder: (ctx) => Dialog(
@@ -158,45 +145,107 @@ class _DownloadsPageState extends State<DownloadsPage> {
                 child: InteractiveViewer(
                   minScale: 0.5,
                   maxScale: 4.0,
-                  child: thumbnailPath != null &&
-                          !kIsWeb &&
-                          File(thumbnailPath).existsSync()
-                      ? Image.file(
-                          File(thumbnailPath),
+                  child: Builder(
+                    builder: (context) {
+                      // ✅ WEB: Use network image
+                      if (kIsWeb) {
+                        if (cloudUrl != null) {
+                          return Image.network(
+                            cloudUrl,
+                            fit: BoxFit.contain,
+                            loadingBuilder: (context, child, loadingProgress) {
+                              if (loadingProgress == null) return child;
+                              return const Center(
+                                child: CircularProgressIndicator(
+                                  color: Colors.white,
+                                ),
+                              );
+                            },
+                            errorBuilder: (context, error, stack) {
+                              print('❌ Web full image error: $error');
+                              return const _DialogPlaceholder(
+                                icon: Icons.cloud_off,
+                                text: 'Failed to load image',
+                              );
+                            },
+                          );
+                        }
+                        return const _DialogPlaceholder(
+                          icon: Icons.image_not_supported,
+                          text: 'Preview not available',
+                        );
+                      }
+
+                      // ✅ MOBILE/DESKTOP: Use local file
+                      if (localPath != null) {
+                        final fullFile = File(localPath);
+                        if (fullFile.existsSync()) {
+                          return Image.file(
+                            fullFile,
+                            fit: BoxFit.contain,
+                            errorBuilder: (context, error, stack) {
+                              print('❌ Full image error: $error');
+                              print('File path: $localPath');
+                              print('File exists: ${fullFile.existsSync()}');
+                              print(
+                                  'File size: ${fullFile.lengthSync()} bytes');
+
+                              // Try cloud URL as fallback
+                              if (cloudUrl != null) {
+                                return Image.network(
+                                  cloudUrl,
+                                  fit: BoxFit.contain,
+                                  errorBuilder: (_, __, ___) {
+                                    return const _DialogPlaceholder(
+                                      icon: Icons.broken_image,
+                                      text: 'Failed to load image',
+                                    );
+                                  },
+                                );
+                              }
+
+                              return const _DialogPlaceholder(
+                                icon: Icons.broken_image,
+                                text: 'Image not found',
+                              );
+                            },
+                          );
+                        } else {
+                          print('❌ File does not exist: $localPath');
+                        }
+                      }
+
+                      // ✅ Fallback to cloud URL
+                      if (cloudUrl != null) {
+                        return Image.network(
+                          cloudUrl,
                           fit: BoxFit.contain,
-                          errorBuilder: (context, error, stack) {
-                            return const _DialogPlaceholder(
-                              icon: Icons.broken_image,
-                              text: 'Image not found',
+                          loadingBuilder: (context, child, loadingProgress) {
+                            if (loadingProgress == null) return child;
+                            return const Center(
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                              ),
                             );
                           },
-                        )
-                      : cloudUrl != null
-                          ? Image.network(
-                              cloudUrl,
-                              fit: BoxFit.contain,
-                              loadingBuilder:
-                                  (context, child, loadingProgress) {
-                                if (loadingProgress == null) return child;
-                                return const Center(
-                                  child: CircularProgressIndicator(
-                                      color: Colors.white),
-                                );
-                              },
-                              errorBuilder: (context, error, stack) {
-                                return const _DialogPlaceholder(
-                                  icon: Icons.cloud_off,
-                                  text: 'Failed to load',
-                                );
-                              },
-                            )
-                          : const Center(
-                              child: Text(
-                                'Preview not available',
-                                style: TextStyle(
-                                    color: Colors.white, fontSize: 16),
-                              ),
-                            ),
+                          errorBuilder: (context, error, stack) {
+                            print('❌ Cloud fallback error: $error');
+                            return const _DialogPlaceholder(
+                              icon: Icons.cloud_off,
+                              text: 'Failed to load',
+                            );
+                          },
+                        );
+                      }
+
+                      return const Center(
+                        child: Text(
+                          'Preview not available',
+                          style: TextStyle(color: Colors.white, fontSize: 16),
+                        ),
+                      );
+                    },
+                  ),
                 ),
               ),
             ),
@@ -312,11 +361,17 @@ class _DownloadsPageState extends State<DownloadsPage> {
                 itemBuilder: (context, index) {
                   final data = items[index] as Map;
                   final String? localPath = data['path'];
-                  final String? thumbnailPath =
-                      data['thumbnailPath']; // ✅ ADD THIS
+                  final String? thumbnailPath = data['thumbnailPath'];
                   final String? cloudUrl = data['cloudUrl'];
                   final String dateStr = data['date'] ?? '';
                   final String name = data['name'] ?? 'Diagram';
+
+                  // ✅ DEBUG: Log available paths
+                  print('📦 Item $index:');
+                  print('  Name: $name');
+                  print('  Local: $localPath');
+                  print('  Thumb: $thumbnailPath');
+                  print('  Cloud: $cloudUrl');
 
                   DateTime date;
                   try {
@@ -331,7 +386,7 @@ class _DownloadsPageState extends State<DownloadsPage> {
                     name: name,
                     date: date,
                     localPath: localPath,
-                    thumbnailPath: thumbnailPath, // ✅ PASS IT HERE
+                    thumbnailPath: thumbnailPath,
                     cloudUrl: cloudUrl,
                     isDark: isDark,
                     onTapPreview: () =>
@@ -527,16 +582,86 @@ class _DiagramCard extends StatelessWidget {
       ),
     );
 
-    // ✅ Use thumbnailPath from card properties (already passed from constructor)
-    if (thumbnailPath != null && !kIsWeb && File(thumbnailPath!).existsSync()) {
-      return Image.file(
-        File(thumbnailPath!),
-        fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => placeholder,
-      );
+    // ✅ WEB: Use memory image from bytes if available
+    if (kIsWeb) {
+      // For web, images should be stored as base64 or available via URL
+      if (cloudUrl != null) {
+        return Image.network(
+          cloudUrl!,
+          fit: BoxFit.cover,
+          loadingBuilder: (context, child, loadingProgress) {
+            if (loadingProgress == null) return child;
+            return Center(
+              child: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation(
+                    isDark ? Colors.white : const Color(0xFF1D4ED8),
+                  ),
+                ),
+              ),
+            );
+          },
+          errorBuilder: (_, error, stack) {
+            print('❌ Web image load error: $error');
+            return placeholder;
+          },
+        );
+      }
+      return placeholder;
     }
 
-    // Fallback to cloud URL
+    // ✅ MOBILE/DESKTOP: Try thumbnail first
+    if (thumbnailPath != null) {
+      final thumbFile = File(thumbnailPath!);
+      if (thumbFile.existsSync()) {
+        return Image.file(
+          thumbFile,
+          fit: BoxFit.cover,
+          errorBuilder: (_, error, stack) {
+            print('❌ Thumbnail load error: $error');
+            // Fallback to full image
+            if (localPath != null) {
+              final fullFile = File(localPath!);
+              if (fullFile.existsSync()) {
+                return Image.file(
+                  fullFile,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) {
+                    print('❌ Full image also failed');
+                    return placeholder;
+                  },
+                );
+              }
+            }
+            return placeholder;
+          },
+        );
+      } else {
+        print('⚠️ Thumbnail file does not exist: $thumbnailPath');
+      }
+    }
+
+    // ✅ Try full image path
+    if (localPath != null) {
+      final fullFile = File(localPath!);
+      if (fullFile.existsSync()) {
+        return Image.file(
+          fullFile,
+          fit: BoxFit.cover,
+          errorBuilder: (_, error, stack) {
+            print('❌ Full image load error: $error');
+            return placeholder;
+          },
+        );
+      } else {
+        print('⚠️ Full image file does not exist: $localPath');
+      }
+    }
+
+    // ✅ Final fallback to cloud URL
     if (cloudUrl != null) {
       return Image.network(
         cloudUrl!,
@@ -547,19 +672,18 @@ class _DiagramCard extends StatelessWidget {
             child: SizedBox(
               width: 24,
               height: 24,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                valueColor: AlwaysStoppedAnimation(
-                  isDark ? Colors.white : const Color(0xFF1D4ED8),
-                ),
-              ),
+              child: CircularProgressIndicator(strokeWidth: 2),
             ),
           );
         },
-        errorBuilder: (_, __, ___) => placeholder,
+        errorBuilder: (_, error, stack) {
+          print('❌ Cloud URL load error: $error');
+          return placeholder;
+        },
       );
     }
 
+    print('⚠️ No valid image source found');
     return placeholder;
   }
 }
