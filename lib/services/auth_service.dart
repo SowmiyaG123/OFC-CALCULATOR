@@ -12,13 +12,15 @@ class AuthService {
         password: password.trim(),
       );
 
-      final user = res.user;
-      if (user == null) throw Exception("Invalid credentials");
+      final User? supabaseUser = res.user;
+      if (supabaseUser == null) {
+        throw Exception("Invalid credentials");
+      }
 
       return local_user.User(
-        email: user.email ?? '',
-        name: user.userMetadata?['name'] ?? 'User',
-        phone: user.userMetadata?['phone'] ?? '',
+        email: supabaseUser.email ?? '',
+        name: supabaseUser.userMetadata?['name']?.toString() ?? 'User',
+        phone: supabaseUser.userMetadata?['phone']?.toString() ?? '',
       );
     } on AuthException catch (e) {
       throw Exception(e.message);
@@ -28,7 +30,10 @@ class AuthService {
   }
 
   /// 🔹 REGISTER new user using Supabase Auth
-  Future<void> registerUser(local_user.User user, String password) async {
+  Future<void> registerUser(
+    local_user.User user,
+    String password,
+  ) async {
     try {
       final AuthResponse res = await _client.auth.signUp(
         email: user.email.trim(),
@@ -61,16 +66,16 @@ class AuthService {
   }
 
   /// 🔹 Get currently logged in user
-  Future<local_user.User?> getCurrentUser() async {
-    final user = _client.auth.currentUser;
-    if (user != null) {
-      return local_user.User(
-        email: user.email ?? '',
-        name: user.userMetadata?['name'] ?? 'User',
-        phone: user.userMetadata?['phone'] ?? '',
-      );
-    }
-    return null;
+  local_user.User? getCurrentUser() {
+    final User? supabaseUser = _client.auth.currentUser;
+
+    if (supabaseUser == null) return null;
+
+    return local_user.User(
+      email: supabaseUser.email ?? '',
+      name: supabaseUser.userMetadata?['name']?.toString() ?? 'User',
+      phone: supabaseUser.userMetadata?['phone']?.toString() ?? '',
+    );
   }
 
   /// 🔹 Logout user

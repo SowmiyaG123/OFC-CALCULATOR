@@ -1,16 +1,29 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+// Screens
 import 'screens/auth/login_page.dart';
+import 'screens/main_app/main_dashboard.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // ✅ Initialize Hive for storing diagram history locally
-  await Hive.initFlutter();
-  await Hive.openBox('diagram_history');
+  // ✅ Initialize Hive safely
+  try {
+    await Hive.initFlutter();
 
-  // ✅ Initialize Supabase
+    if (!Hive.isBoxOpen('diagram_history')) {
+      await Hive.openBox('diagram_history');
+      debugPrint("✅ Hive box 'diagram_history' opened successfully.");
+    } else {
+      debugPrint("ℹ️ Hive box 'diagram_history' already open.");
+    }
+  } catch (e) {
+    debugPrint("❌ Hive initialization failed: $e");
+  }
+
+  // ✅ Initialize Supabase safely
   try {
     await Supabase.initialize(
       url: 'https://gmzlyasleyrsyphdasqk.supabase.co',
@@ -37,7 +50,11 @@ class MyApp extends StatelessWidget {
         useMaterial3: true,
         colorSchemeSeed: Colors.blue,
       ),
-      home: const LoginPage(),
+      initialRoute: '/login',
+      routes: {
+        '/login': (context) => const LoginPage(),
+        '/dashboard': (context) => const MainDashboard(), // 👈 Dashboard route
+      },
     );
   }
 }
