@@ -6,14 +6,14 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:flutter/rendering.dart';
-import 'dart:io' if (kIsWeb) 'dart:html';
+// Replace the HTML import at the top with:
+import 'dart:html' as html if (dart.library.html) 'dart:html';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:math' as math;
 import 'dart:convert';
 import 'dart:ui' as ui;
 import 'package:flutter/rendering.dart';
 import 'package:image/image.dart' as img;
-import 'dart:html' as html if (dart.library.html) 'dart:html';
 
 // ---------------- Helper Functions ----------------
 const double ln10 = 2.302585092994046;
@@ -312,7 +312,7 @@ class EnvelopeLayoutManager {
   static const double verticalPadding = 40.0;
   static const double verticalStep = 25.0; // Search step for free Y position
   static const double minHorizontalSpacing =
-      180.0; // Min spacing between siblings
+      200.0; // Min spacing between siblings
   static const double verticalSpacing = 290.0; // Distance between parent-child
 
   // Global occupancy tracker
@@ -334,7 +334,7 @@ class EnvelopeLayoutManager {
     final height = blockHeight + verticalPadding * 2;
 
     double testY = preferredY;
-    int maxIterations = 200;
+    int maxIterations = 200; // Prevent infinite loops
     int iterations = 0;
 
     while (iterations < maxIterations) {
@@ -355,9 +355,11 @@ class EnvelopeLayoutManager {
       iterations++;
     }
 
+    // Fallback: return far below everything
     return preferredY + (iterations * verticalStep);
   }
 
+  // Reserve space for a block
   static void reserveSpace({
     required double xCenter,
     required double yTop,
@@ -374,40 +376,26 @@ class EnvelopeLayoutManager {
     _occupiedZones.add(envelope);
   }
 
-  // ✅ NEW: Calculate positions with branch containment
+  // Calculate initial X positions for siblings (same as before)
   static List<double> calculateInitialPositions({
     required int count,
     required double parentX,
-    double? maxSpread, // New parameter to limit horizontal spread
   }) {
     if (count == 1) return [parentX];
 
-    // ✅ Limit spread based on sibling count
-    double effectiveSpacing = minHorizontalSpacing;
+    final spacing = minHorizontalSpacing;
+    final totalWidth = (count - 1) * spacing;
+    final startX = parentX - totalWidth / 2;
 
-    // Reduce spacing for large sibling groups
-    if (count > 8) {
-      effectiveSpacing = 160.0;
-    } else if (count > 4) {
-      effectiveSpacing = 170.0;
-    }
-
-    final totalWidth = (count - 1) * effectiveSpacing;
-
-    // ✅ Apply max spread constraint if provided
-    final constrainedWidth =
-        maxSpread != null && totalWidth > maxSpread ? maxSpread : totalWidth;
-
-    final actualSpacing = count > 1 ? constrainedWidth / (count - 1) : 0;
-    final startX = parentX - constrainedWidth / 2;
-
-    return List.generate(count, (i) => startX + i * actualSpacing);
+    return List.generate(count, (i) => startX + i * spacing);
   }
 
+  // Adjust X positions to avoid horizontal collisions (quick check)
   static List<double> adjustForHorizontalCollisions({
     required List<double> positions,
     required double y,
   }) {
+    // Check each position for horizontal conflicts at this Y level
     List<double> adjusted = List.from(positions);
     bool changed = true;
     int maxIterations = 50;
@@ -423,6 +411,7 @@ class EnvelopeLayoutManager {
         double gap = x2 - x1;
 
         if (gap < blockWidth + horizontalPadding * 2) {
+          // Too close, push apart
           double pushAmount = (blockWidth + horizontalPadding * 2 - gap) / 2;
           adjusted[i] -= pushAmount;
           adjusted[i + 1] += pushAmount;
@@ -434,6 +423,7 @@ class EnvelopeLayoutManager {
     return adjusted;
   }
 
+  // Check if a position would collide with any existing envelope
   static bool wouldCollide({
     required double xCenter,
     required double yTop,
@@ -446,6 +436,7 @@ class EnvelopeLayoutManager {
         .any((zone) => zone.overlapsWith(xStart, xEnd, yTop, yBottom));
   }
 
+  // Get all occupied zones (for debugging)
   static List<OccupiedEnvelope> getOccupiedZones() {
     return List.from(_occupiedZones);
   }
@@ -3172,57 +3163,45 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     setState(() => _isSaving = true);
 
     try {
-      // ✅ Calculate FULL bounds (no viewport dependency)
-      final bounds = calculateBounds(root!);
-      final padding = 50.0;
+      Uint8List pngBytes;
 
-      // ✅ Create OFFSCREEN canvas
-      final recorder = ui.PictureRecorder();
-      final canvas = Canvas(recorder);
+      if (kIsWeb) {
+        pngBytes = await _captureUsingHtmlCanvas();
+      } else {
+        try {
+          final boundary = repaintKey.currentContext!.findRenderObject()
+              as RenderRepaintBoundary;
+          final image = await boundary.toImage(pixelRatio: 3.0);
+          final byteData =
+              await image.toByteData(format: ui.ImageByteFormat.png);
+          pngBytes = byteData!.buffer.asUint8List();
+        } catch (e) {
+          print('⚠️ RepaintBoundary failed, using custom renderer: $e');
+          pngBytes = await _captureUsingCustomPainter();
+        }
+      }
 
-      // ✅ White background
-      canvas.drawRect(
-        Rect.fromLTWH(
-            0, 0, bounds.width + padding * 2, bounds.height + padding * 2),
-        Paint()..color = Colors.white,
-      );
-
-      // ✅ Shift diagram to account for padding
-      canvas.translate(padding - bounds.left, padding - bounds.top);
-
-      // ✅ Draw diagram using SAME painter logic
-      final painter = _DiagramPainter(
-        root: root!,
-        highlightedNodes: [],
-      );
-
-      painter.paint(canvas,
-          Size(bounds.width + padding * 2, bounds.height + padding * 2));
-
-      // ✅ Convert to PNG
-      final picture = recorder.endRecording();
-      final image = await picture.toImage(
-        (bounds.width + padding * 2).ceil(),
-        (bounds.height + padding * 2).ceil(),
-      );
-
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-      final pngBytes = byteData!.buffer.asUint8List();
-
-      // ✅ Validate image
+      // ✅ CRITICAL: Validate image is not empty
       if (pngBytes.isEmpty || pngBytes.length < 1000) {
         throw Exception(
-            'Generated image is too small (${pngBytes.length} bytes)');
+            'Generated image is too small or empty (${pngBytes.length} bytes)');
       }
 
-      print('✅ Canva-style export: ${pngBytes.length} bytes');
+      print('📦 Image size: ${pngBytes.length} bytes');
 
-      // ✅ Decode and create thumbnail
+      // ✅ FIX: Decode and validate image
       final fullImage = img.decodeImage(pngBytes);
       if (fullImage == null) {
-        throw Exception('Failed to decode image');
+        throw Exception(
+            'Failed to decode captured image - image may be corrupted');
       }
 
+      print(
+          '✅ Image decoded successfully: ${fullImage.width}x${fullImage.height}');
+
+      // Rest of your code continues...
+
+      // ✅ FIX: Generate PROPER thumbnail with aspect ratio
       final thumbnailSize = 300;
       final thumbnail = img.copyResize(
         fullImage,
@@ -3232,26 +3211,52 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       );
       final thumbnailBytes = Uint8List.fromList(img.encodePng(thumbnail));
 
+      // ✅ FIX: Re-encode full image to ensure it's valid
+      final reEncodedFullImage = Uint8List.fromList(img.encodePng(fullImage));
+
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final fileName = 'ofc_diagram_$timestamp.png';
       final thumbFileName = 'ofc_thumb_$timestamp.png';
 
       String? fullImagePath;
       String? thumbnailPath;
-      String? cloudUrl;
 
-      // ✅ PLATFORM-SPECIFIC SAVING
       if (kIsWeb) {
-        await _saveForWeb(pngBytes, fileName);
-        cloudUrl = null; // Web doesn't generate a file path
+        final blob = html.Blob([reEncodedFullImage], 'image/png');
+        final url = html.Url.createObjectUrlFromBlob(blob);
+        final anchor = html.AnchorElement(href: url)
+          ..setAttribute('download', fileName)
+          ..click();
+        html.Url.revokeObjectUrl(url);
       } else {
-        final result = await _saveForMobile(
-            pngBytes, fileName, thumbnailBytes, thumbFileName);
-        fullImagePath = result['fullImagePath'];
-        thumbnailPath = result['thumbnailPath'];
+        // ✅ FIX: Save to proper downloads directory
+        Directory dir;
+
+        // Try external storage first
+        try {
+          final externalDir = Directory('/storage/emulated/0/Download');
+          if (await externalDir.exists()) {
+            dir = externalDir;
+          } else {
+            dir = await getApplicationDocumentsDirectory();
+          }
+        } catch (e) {
+          dir = await getApplicationDocumentsDirectory();
+        }
+
+        // After saving full image
+        final fullFile = File('${dir.path}/$fileName');
+        await fullFile.writeAsBytes(reEncodedFullImage);
+        fullImagePath = fullFile.path;
+
+// ✅ Verify the file was saved correctly
+        await _verifyImageFile(fullImagePath);
+
+        print(
+            '✅ Full image saved: $fullImagePath (${reEncodedFullImage.length} bytes)');
       }
 
-      // ✅ Save to Hive
+      // ✅ Save to Hive with BOTH paths
       final downloadsBox = await Hive.openBox('diagram_downloads');
       await downloadsBox.add({
         'name': _projectName ??
@@ -3259,9 +3264,9 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
         'fileName': fileName,
         'date': DateTime.now().toIso8601String(),
         'type': 'png',
-        'path': fullImagePath,
-        'thumbnailPath': thumbnailPath,
-        'cloudUrl': cloudUrl,
+        'path': fullImagePath, // ✅ Full image path
+        'thumbnailPath': thumbnailPath, // ✅ Thumbnail path
+        'cloudUrl': null,
         'headendName': _headendNameCtrl.text,
         'headendPower':
             double.tryParse(_headendDbmCtrl.text) ?? defaultHeadendDbm,
@@ -3310,148 +3315,118 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     }
   }
 
-// ✅ WEB-SPECIFIC SAVE FUNCTION
-  Future<void> _saveForWeb(Uint8List pngBytes, String fileName) async {
-    if (!kIsWeb) return;
+  Future<Uint8List> _captureUsingHtmlCanvas() async {
+    final size = _calculateDiagramSize(root!);
+    final width = size.width.toInt();
+    final height = size.height.toInt();
 
-    try {
-      // Create base64 data URL
-      final base64Data = base64Encode(pngBytes);
-      final dataUrl = 'data:image/png;base64,$base64Data';
+    print('📐 Capturing diagram: ${width}x$height');
 
-      // Create download link
-      final anchor = html.AnchorElement()
-        ..href = dataUrl
-        ..download = fileName
-        ..style.display = 'none';
+    // ✅ CRITICAL FIX: Use Flutter's rendering, NOT HTML canvas
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
 
-      html.document.body?.append(anchor);
-      anchor.click();
-      anchor.remove();
+    // White background
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = Colors.white,
+    );
 
-      print('✅ Web download initiated for: $fileName');
-    } catch (e) {
-      print('❌ Web download error: $e');
+    // Render the actual diagram
+    final painter = _DiagramPainter(
+      root: root!,
+      highlightedNodes: [],
+    );
+    painter.paint(canvas, size);
 
-      // Fallback: Open in new tab
-      final base64Data = base64Encode(pngBytes);
-      final dataUrl = 'data:image/png;base64,$base64Data';
-      html.window.open(dataUrl, '_blank');
+    // Convert to image
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(width, height);
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
 
-      print('✅ Opened image in new tab as fallback');
-    }
+    final bytes = byteData!.buffer.asUint8List();
+    print('✅ Generated image: ${bytes.length} bytes');
+
+    return bytes;
   }
 
-// ✅ MOBILE-SPECIFIC SAVE FUNCTION
-  Future<Map<String, String?>> _saveForMobile(
-    Uint8List pngBytes,
-    String fileName,
-    Uint8List thumbnailBytes,
-    String thumbFileName,
-  ) async {
-    if (kIsWeb) return {'fullImagePath': null, 'thumbnailPath': null};
+// ✅ MOBILE: Custom painter capture (fallback)
+  Future<Uint8List> _captureUsingCustomPainter() async {
+    final size = _calculateDiagramSize(root!);
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
 
-    try {
-      Directory dir;
-      try {
-        // Try external storage first (Android)
-        final externalDir = Directory('/storage/emulated/0/Download');
-        if (await externalDir.exists()) {
-          dir = externalDir;
-        } else {
-          // Fallback to app documents directory
-          dir = await getApplicationDocumentsDirectory();
-        }
-      } catch (e) {
-        // Final fallback
-        dir = await getApplicationDocumentsDirectory();
-      }
+    // White background
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = Colors.white,
+    );
 
-      // Save full image
-      final fullFile = File('${dir.path}/$fileName');
-      await fullFile.writeAsBytes(pngBytes);
-      final fullImagePath = fullFile.path;
+    // Render diagram
+    final painter = _DiagramPainter(
+      root: root!,
+      highlightedNodes: [],
+    );
+    painter.paint(canvas, size);
 
-      // Save thumbnail
-      final thumbFile = File('${dir.path}/$thumbFileName');
-      await thumbFile.writeAsBytes(thumbnailBytes);
-      final thumbnailPath = thumbFile.path;
+    // Convert to image
+    final picture = recorder.endRecording();
+    final image =
+        await picture.toImage(size.width.toInt(), size.height.toInt());
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
 
-      print('✅ Mobile saved: $fullImagePath (${pngBytes.length} bytes)');
-      print(
-          '✅ Thumbnail saved: $thumbnailPath (${thumbnailBytes.length} bytes)');
-
-      return {
-        'fullImagePath': fullImagePath,
-        'thumbnailPath': thumbnailPath,
-      };
-    } catch (e) {
-      print('❌ Mobile save error: $e');
-      rethrow;
-    }
+    return byteData!.buffer.asUint8List();
   }
 
-  Rect calculateBounds(DiagramNode root) {
+  Size _calculateDiagramSize(DiagramNode root) {
     double minX = double.infinity;
+    double maxX = double.negativeInfinity;
     double minY = double.infinity;
-    double maxX = 0;
-    double maxY = 0;
+    double maxY = double.negativeInfinity;
 
-    void walk(DiagramNode n, double x, double y, {int level = 0}) {
-      if (n.isHeadend && level == 0) {
-        EnvelopeLayoutManager.reset();
-      }
+    void traverse(DiagramNode node, double x, double y) {
+      // Track bounds with proper padding
+      minX = math.min(minX, x - 100);
+      maxX = math.max(maxX, x + 100);
+      minY = math.min(minY, y - 80);
+      maxY = math.max(maxY, y + 150); // Extra space for house icons
 
-      // Track this node's position
-      minX = minX < x - 100 ? minX : x - 100;
-      minY = minY < y - 80 ? minY : y - 80;
-      maxX = maxX > x + 100 ? maxX : x + 100;
-      maxY = maxY > y + 150 ? maxY : y + 150;
-
-      // Process children with SAME layout logic as painter
-      if (n.children.isNotEmpty) {
-        final count = n.children.length;
-        List<double> xPositions =
-            EnvelopeLayoutManager.calculateInitialPositions(
+      if (node.children.isNotEmpty) {
+        final count = node.children.length;
+        final xPositions = EnvelopeLayoutManager.calculateInitialPositions(
           count: count,
           parentX: x,
         );
 
         final childBaseY = y + EnvelopeLayoutManager.verticalSpacing;
-        xPositions = EnvelopeLayoutManager.adjustForHorizontalCollisions(
+        final adjustedPositions =
+            EnvelopeLayoutManager.adjustForHorizontalCollisions(
           positions: xPositions,
           y: childBaseY,
         );
 
         for (int i = 0; i < count; i++) {
-          final child = n.children[i];
-          final childX = xPositions[i];
+          final child = node.children[i];
+          final childX = adjustedPositions[i];
           final childY = EnvelopeLayoutManager.findFreeY(
             xCenter: childX,
             preferredY: childBaseY,
             nodeId: child.id,
           );
-
-          EnvelopeLayoutManager.reserveSpace(
-            xCenter: childX,
-            yTop: childY,
-            nodeId: child.id,
-          );
-
-          walk(child, childX, childY, level: level + 1);
+          traverse(child, childX, childY);
         }
       }
-
-      EnvelopeLayoutManager.reserveSpace(
-        xCenter: x,
-        yTop: y - EnvelopeLayoutManager.blockHeight / 2,
-        nodeId: n.id,
-      );
     }
 
-    walk(root, 3000, 100);
+    EnvelopeLayoutManager.reset();
+    traverse(root, 3000, 100);
 
-    return Rect.fromLTRB(minX, minY, maxX, maxY);
+    // Add minimum padding
+    final width = (maxX - minX + 200).clamp(800.0, 15000.0);
+    final height = (maxY - minY + 200).clamp(600.0, 10000.0);
+
+    print('📏 Calculated diagram size: ${width}x$height');
+    return Size(width, height);
   }
 
   Future<void> _verifyImageFile(String path) async {
@@ -3526,6 +3501,23 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       print('Cloud upload error: $e');
       return null;
     }
+  }
+
+  // Add this method to _OFCDiagramPageState class
+  Future<void> _zoomOutAndSave() async {
+    // First show a message about zooming out
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Auto-zooming out to capture entire diagram...'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+
+    // Wait a bit for the message to be seen
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    // Now save the diagram
+    await _saveDiagram();
   }
 
   @override
@@ -4368,51 +4360,34 @@ class _DiagramPainter extends CustomPainter {
       ..strokeWidth = 2.5;
 
     final trunkY = parentY + 45;
-    final childTop = childY - 55;
+    final splitY = parentY + 165;
+    final blockTop = childY - 55;
 
-    // ✅ Calculate safe routing Y level
-    double routingY = parentY + 165;
-
-    // ✅ Check if there are blocks between parent and child
     final zones = EnvelopeLayoutManager.getOccupiedZones();
-    final minX = math.min(parentX, childX);
-    final maxX = math.max(parentX, childX);
 
-    // Find highest blocking zone
-    double highestBlockBottom = routingY;
-    for (final zone in zones) {
-      if (zone.nodeId == child.id) continue;
+    // Vertical line from parent
+    canvas.drawLine(
+        Offset(parentX, trunkY), Offset(parentX, splitY), paintLine);
 
-      // Check if zone is in the path
-      if (!(maxX < zone.xStart || minX > zone.xEnd)) {
-        if (zone.yBottom > routingY && zone.yTop < childTop) {
-          highestBlockBottom = math.max(highestBlockBottom, zone.yBottom + 20);
-        }
-      }
+    final horizontalPath = _isPathClear(parentX, childX, splitY, zones);
+
+    if (horizontalPath) {
+      // Direct horizontal connection
+      canvas.drawLine(
+          Offset(parentX, splitY), Offset(childX, splitY), paintLine);
+      canvas.drawLine(
+          Offset(childX, splitY), Offset(childX, blockTop), paintLine);
+    } else {
+      // Route around obstacles
+      _drawRoutedConnection(
+          canvas, paintLine, parentX, splitY, childX, blockTop, zones);
     }
 
-    routingY = highestBlockBottom;
-
-    // ✅ Draw path avoiding blocks
-    final path = Path();
-    path.moveTo(parentX, trunkY);
-
-    // Go down from parent
-    path.lineTo(parentX, routingY);
-
-    // Move horizontally at safe level
-    path.lineTo(childX, routingY);
-
-    // Go up to child
-    path.lineTo(childX, childTop);
-
-    canvas.drawPath(path, paintLine);
-
-    // ✅ Draw arrow at child
+    // ✅ FIX: Draw arrow at END of line (at child block top)
     final arrowPath = Path();
-    arrowPath.moveTo(childX, childTop);
-    arrowPath.lineTo(childX - 5, childTop - 8);
-    arrowPath.lineTo(childX + 5, childTop - 8);
+    arrowPath.moveTo(childX, blockTop);
+    arrowPath.lineTo(childX - 5, blockTop - 8);
+    arrowPath.lineTo(childX + 5, blockTop - 8);
     arrowPath.close();
 
     canvas.drawPath(
@@ -4431,7 +4406,7 @@ class _DiagramPainter extends CustomPainter {
       final distanceTp =
           _text(distanceText, 10, Colors.white, fontWeight: FontWeight.bold);
       final bgRect = Rect.fromCenter(
-        center: Offset(childX, routingY),
+        center: Offset(childX, splitY),
         width: distanceTp.width + 16,
         height: 20,
       );
@@ -4449,7 +4424,7 @@ class _DiagramPainter extends CustomPainter {
 
       distanceTp.paint(
         canvas,
-        Offset(childX - distanceTp.width / 2, routingY - distanceTp.height / 2),
+        Offset(childX - distanceTp.width / 2, splitY - distanceTp.height / 2),
       );
     }
   }
@@ -4466,19 +4441,9 @@ class _DiagramPainter extends CustomPainter {
 
     if (node.children.isNotEmpty) {
       final count = node.children.length;
-
-      // ✅ Calculate max spread to contain children within parent's branch
-      double maxSpread = 800.0; // Default max width for a branch
-      if (count > 8) {
-        maxSpread = 1200.0;
-      } else if (count > 4) {
-        maxSpread = 1000.0;
-      }
-
       List<double> xPositions = EnvelopeLayoutManager.calculateInitialPositions(
         count: count,
         parentX: x,
-        maxSpread: maxSpread, // ✅ Add constraint
       );
 
       final childBaseY = y + EnvelopeLayoutManager.verticalSpacing;
@@ -4502,7 +4467,7 @@ class _DiagramPainter extends CustomPainter {
           nodeId: child.id,
         );
 
-        // ✅ Draw improved connections
+        // SMART LINE DRAWING - Avoid blocks
         _drawSmartConnection(canvas, x, y, childX, childY, child);
 
         _draw(canvas, child, childX, childY, level: level + 1);
