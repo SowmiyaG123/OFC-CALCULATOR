@@ -13,6 +13,7 @@ import 'dart:math' as math;
 import 'dart:convert';
 import 'dart:ui' as ui;
 import 'package:flutter/rendering.dart';
+import 'dart:async' show unawaited;
 import 'package:image/image.dart' as img;
 
 // ---------------- Helper Functions ----------------
@@ -49,6 +50,7 @@ class DiagramNode {
   double fiberLoss;
   String? endpointName;
   String? endpointDescription;
+  Color? flowColor;
 
   DiagramNode({
     required this.id,
@@ -72,6 +74,7 @@ class DiagramNode {
     this.fiberLoss = 0.0,
     this.endpointName, // ADD THIS
     this.endpointDescription, // ADD THIS
+    this.flowColor, // ADD THIS
   }) : children = children ?? [];
 
   bool get isLeaf => children.isEmpty;
@@ -79,6 +82,89 @@ class DiagramNode {
   bool get isSplitter => deviceType == 'splitter';
   bool get isHeadend => deviceType == 'headend';
   bool get isCouplerSplitBlock => isCouplerOutput;
+}
+
+// 1. ADD THIS: Color management system
+class FlowColorManager {
+  static final List<Color> _availableColors = [
+    Color(0xFF1976D2),
+    Color(0xFFE91E63),
+    Color(0xFF4CAF50),
+    Color(0xFFFF9800),
+    Color(0xFF9C27B0),
+    Color(0xFF00BCD4),
+    Color(0xFFFFEB3B),
+    Color(0xFF795548),
+    Color(0xFFFF5722),
+    Color(0xFF009688),
+    Color(0xFF3F51B5),
+    Color(0xFF8BC34A),
+    Color(0xFFFFC107),
+    Color(0xFF607D8B),
+    Color(0xFFE91E63),
+    Color(0xFF673AB7),
+    Color(0xFF00897B),
+    Color(0xFFF44336),
+    Color(0xFF2196F3),
+    Color(0xFFCDDC39),
+    Color(0xFFFF6F00),
+    Color(0xFF6A1B9A),
+    Color(0xFF1565C0),
+    Color(0xFFD32F2F),
+    Color(0xFF388E3C),
+    Color(0xFFF57C00),
+    Color(0xFF5E35B1),
+    Color(0xFF0277BD),
+    Color(0xFFC2185B),
+    Color(0xFF7B1FA2),
+    Color(0xFF0288D1),
+    Color(0xFFAFB42B),
+    Color(0xFFE64A19),
+    Color(0xFF00796B),
+    Color(0xFF303F9F),
+    Color(0xFFFBC02D),
+    Color(0xFF512DA8),
+    Color(0xFF0097A7),
+    Color(0xFF689F38),
+    Color(0xFFFF8F00),
+    Color(0xFF455A64),
+    Color(0xFFD81B60),
+    Color(0xFF00ACC1),
+    Color(0xFFF4511E),
+    Color(0xFF8E24AA),
+    Color(0xFF43A047),
+    Color(0xFFFB8C00),
+    Color(0xFF1E88E5),
+    Color(0xFFAB47BC),
+    Color(0xFF26A69A),
+    Color(0xFFEF5350),
+    Color(0xFF5C6BC0),
+    Color(0xFF9CCC65),
+    Color(0xFFFFCA28),
+    Color(0xFF78909C),
+    Color(0xFFEC407A),
+    Color(0xFF66BB6A),
+    Color(0xFFFF7043),
+    Color(0xFF29B6F6),
+    Color(0xFFBDBDBD),
+    Color(0xFFFFEE58),
+    Color(0xFFBA68C8),
+    Color(0xFF42A5F5),
+    Color(0xFF8D6E63),
+  ];
+
+  static int _currentColorIndex = 0;
+
+  static Color getNextColor() {
+    final color =
+        _availableColors[_currentColorIndex % _availableColors.length];
+    _currentColorIndex++;
+    return color;
+  }
+
+  static void reset() {
+    _currentColorIndex = 0;
+  }
 }
 
 class OccupiedEnvelope {
@@ -460,6 +546,72 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
   DiagramNode? root;
   DiagramNode? _highlightedNode;
 
+  // Add these class variables at the top of _OFCDiagramPageState
+  final List<Map<String, dynamic>> _historyStack = [];
+  int _historyIndex = -1;
+  static const int _maxHistorySize = 50;
+
+// Add these methods
+  void _saveToHistory() {
+    // Remove any redo history
+    if (_historyIndex < _historyStack.length - 1) {
+      _historyStack.removeRange(_historyIndex + 1, _historyStack.length);
+    }
+
+    // Add current state
+    final state = {
+      'headendName': _headendNameCtrl.text,
+      'headendPower':
+          double.tryParse(_headendDbmCtrl.text) ?? defaultHeadendDbm,
+      'wavelength': _selectedWavelength,
+      'useWdm': _useWdm,
+      'wdmLoss': _wdmLoss,
+      'wdmPower': double.tryParse(_wdmPowerCtrl.text) ?? 0.0,
+      'diagramTree': root != null ? _serializeDiagramTree(root!) : null,
+      'nodeCounter': _nodeCounter,
+    };
+
+    _historyStack.add(state);
+    _historyIndex++;
+
+    // Limit history size
+    if (_historyStack.length > _maxHistorySize) {
+      _historyStack.removeAt(0);
+      _historyIndex--;
+    }
+  }
+
+  void _undo() {
+    if (_historyIndex > 0) {
+      _historyIndex--;
+      _restoreFromHistory(_historyStack[_historyIndex]);
+    }
+  }
+
+  void _redo() {
+    if (_historyIndex < _historyStack.length - 1) {
+      _historyIndex++;
+      _restoreFromHistory(_historyStack[_historyIndex]);
+    }
+  }
+
+  void _restoreFromHistory(Map<String, dynamic> state) {
+    setState(() {
+      _headendNameCtrl.text = state['headendName'];
+      _headendDbmCtrl.text = state['headendPower'].toString();
+      _selectedWavelength = state['wavelength'];
+      _useWdm = state['useWdm'];
+      _wdmLoss = state['wdmLoss'];
+      _wdmPowerCtrl.text = state['wdmPower'].toString();
+      _nodeCounter = state['nodeCounter'];
+
+      if (state['diagramTree'] != null) {
+        root = _deserializeDiagramTree(state['diagramTree'], null);
+        _recalculateAll(root!);
+      }
+    });
+  }
+
 // Replace the existing _findAllMatchingNodes method with:
   List<DiagramNode> _findAllMatchingNodes(DiagramNode node, String query) {
     if (query.isEmpty) return [];
@@ -643,6 +795,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
   }
 
   void _initRoot() {
+    FlowColorManager.reset(); // 🎨 RESET COLORS
     root = DiagramNode(
       id: _nodeCounter++,
       label: _headendNameCtrl.text,
@@ -652,6 +805,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       wavelength: _selectedWavelength,
       useWdm: _useWdm,
       wdmLoss: _wdmLoss,
+      flowColor: Color(0xFF1A237E), // 🎨 HEADEND COLOR
     );
   }
 
@@ -981,6 +1135,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       }
 
       _recalculateAll(root!);
+      _saveToHistory(); // ADD THIS
     });
   }
 
@@ -1304,9 +1459,12 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                     fiberLoss: fiberLoss,
                     endpointName: endpointName,
                     endpointDescription: endpointDesc,
+                    flowColor: parent.flowColor,
                   );
 
                   parent.children.add(child);
+
+                  _saveToHistory(); // ADD THIS
                   if (parent.isLeaf) {
                     parent.deviceType = 'pass';
                   }
@@ -1597,7 +1755,8 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                         final device2Loss = losses[3]; // Remove wdmLoss
                         // 1) In _addCoupler(...), set both outputs to use EXACT entered name (no auto-append ratio).
 // Replace the two DiagramNode creations for output1 and output2 with the following:
-
+                        final couplerFlowColor =
+                            FlowColorManager.getNextColor();
                         final output1 = DiagramNode(
                           id: _nodeCounter++,
                           label:
@@ -1615,6 +1774,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                           isCouplerOutput: true,
                           deviceLoss: device1Loss,
                           fiberLoss: fiberLoss,
+                          flowColor: couplerFlowColor, // 🎨 ASSIGN COLOR
                         );
 
                         final output2 = DiagramNode(
@@ -1634,10 +1794,13 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                           isCouplerOutput: true,
                           deviceLoss: device2Loss,
                           fiberLoss: fiberLoss,
+                          flowColor: couplerFlowColor, // 🎨 ASSIGN COLO
                         );
 
                         parent.children.add(output1);
                         parent.children.add(output2);
+
+                        _saveToHistory(); // ADD THIS
                         _recalculate(root!);
                       });
                       Navigator.pop(ctx);
@@ -1983,7 +2146,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
 
                   final baseLabel =
                       labelCtrl.text.isEmpty ? 'Splitter' : labelCtrl.text;
-
+                  final splitterFlowColor = FlowColorManager.getNextColor();
                   for (int i = 0; i < split; i++) {
                     final outputNode = DiagramNode(
                       id: _nodeCounter++,
@@ -2000,9 +2163,11 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                       deviceLoss: finalDeviceLoss,
                       fiberLoss: fiberLoss,
                       wdmOutputPower: wdmOutputPower, // ✅ ADD THIS
+                      flowColor: splitterFlowColor, // 🎨 ASSIGN COLOR
                     );
                     parent.children.add(outputNode);
                   }
+                  _saveToHistory(); // ADD THIS
                   _recalculate(root!);
                 });
                 Navigator.pop(ctx);
@@ -2215,6 +2380,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                             }
 
                             _recalculate(root!);
+                            _saveToHistory(); // ADD THIS
                           });
                           Navigator.pop(ctx);
                         },
@@ -2347,6 +2513,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                   final parent = _findNode(root, node.parentId!);
                   if (parent != null) {
                     parent.children.removeWhere((c) => c.id == node.id);
+                    _saveToHistory(); // ADD THIS
                     _recalculate(root!);
                   }
                 });
@@ -2397,6 +2564,7 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       'endpointDescription': node.endpointDescription,
       'children':
           node.children.map((child) => _serializeDiagramTree(child)).toList(),
+      'flowColor': node.flowColor?.value, // 🎨 SAVE COLOR
     };
   }
 
@@ -2431,6 +2599,9 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       endpointName: data['endpointName'],
       endpointDescription: data['endpointDescription'],
       parentId: parentId,
+      flowColor: data['flowColor'] != null
+          ? Color(data['flowColor'])
+          : null, // 🎨 RESTORE COLOR
     );
 
     if (data['children'] != null) {
@@ -3160,169 +3331,374 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
   Future<void> _saveDiagram() async {
     if (root == null) return;
 
-    setState(() => _isSaving = true);
+    // ENHANCED PROGRESS DIALOG with steps
+    bool isDialogShowing = true;
+    String currentStep = 'Initializing...';
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return WillPopScope(
+            onWillPop: () async => false,
+            child: AlertDialog(
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20)),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Animated progress indicator
+                  SizedBox(
+                    width: 80,
+                    height: 80,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        CircularProgressIndicator(
+                          strokeWidth: 6,
+                          valueColor: AlwaysStoppedAnimation(Color(0xFF4CAF50)),
+                        ),
+                        Icon(Icons.image, size: 32, color: Color(0xFF4CAF50)),
+                      ],
+                    ),
+                  ),
+                  SizedBox(height: 28),
+                  Text(
+                    'Generating Diagram',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF1A237E),
+                    ),
+                  ),
+                  SizedBox(height: 12),
+                  Text(
+                    currentStep,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey.shade700,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    '⚡ Please wait...',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFFFF9800),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    ).then((_) => isDialogShowing = false);
 
     try {
-      Uint8List pngBytes;
+      // TURBO OPTIMIZATION 1: Ultra-lightweight position scan
+      final positions = <Offset>[];
 
-      if (kIsWeb) {
-        pngBytes = await _captureUsingHtmlCanvas();
-      } else {
-        try {
-          final boundary = repaintKey.currentContext!.findRenderObject()
-              as RenderRepaintBoundary;
-          final image = await boundary.toImage(pixelRatio: 3.0);
-          final byteData =
-              await image.toByteData(format: ui.ImageByteFormat.png);
-          pngBytes = byteData!.buffer.asUint8List();
-        } catch (e) {
-          print('⚠️ RepaintBoundary failed, using custom renderer: $e');
-          pngBytes = await _captureUsingCustomPainter();
+      void ultraFastScan(DiagramNode node, double x, double y,
+          {int level = 0}) {
+        if (level == 0) EnvelopeLayoutManager.reset();
+
+        positions.add(Offset(x - 70, y - 60));
+        positions.add(Offset(x + 70, y + 60));
+        if (node.isLeaf && !node.isHeadend) positions.add(Offset(x, y + 150));
+
+        if (node.children.isNotEmpty) {
+          final count = node.children.length;
+          final xPos = EnvelopeLayoutManager.calculateInitialPositions(
+              count: count, parentX: x);
+          final childY = y + 290;
+          final adjusted = EnvelopeLayoutManager.adjustForHorizontalCollisions(
+              positions: xPos, y: childY);
+
+          for (int i = 0; i < count; i++) {
+            final child = node.children[i];
+            final cX = adjusted[i];
+            final cY = EnvelopeLayoutManager.findFreeY(
+                xCenter: cX, preferredY: childY, nodeId: child.id);
+            EnvelopeLayoutManager.reserveSpace(
+                xCenter: cX, yTop: cY, nodeId: child.id);
+            ultraFastScan(child, cX, cY, level: level + 1);
+          }
         }
+        EnvelopeLayoutManager.reserveSpace(
+            xCenter: x, yTop: y - 60, nodeId: node.id);
       }
 
-      // ✅ CRITICAL: Validate image is not empty
-      if (pngBytes.isEmpty || pngBytes.length < 1000) {
-        throw Exception(
-            'Generated image is too small or empty (${pngBytes.length} bytes)');
+      EnvelopeLayoutManager.reset();
+      ultraFastScan(root!, 1000, 100);
+
+      // TURBO OPTIMIZATION 2: Lightning-fast bounds
+      double minX = positions[0].dx, maxX = positions[0].dx;
+      double minY = positions[0].dy, maxY = positions[0].dy;
+
+      for (final pos in positions) {
+        if (pos.dx < minX) minX = pos.dx;
+        if (pos.dx > maxX) maxX = pos.dx;
+        if (pos.dy < minY) minY = pos.dy;
+        if (pos.dy > maxY) maxY = pos.dy;
       }
 
-      print('📦 Image size: ${pngBytes.length} bytes');
+      final padding = 250.0;
+      double width = maxX - minX + padding * 2;
+      double height = maxY - minY + padding * 2;
 
-      // ✅ FIX: Decode and validate image
-      final fullImage = img.decodeImage(pngBytes);
-      if (fullImage == null) {
-        throw Exception(
-            'Failed to decode captured image - image may be corrupted');
+      // TURBO OPTIMIZATION 3: Aggressive scaling for speed
+      double scale = 1.0;
+      if (width > 12000 || height > 8000) {
+        scale = 0.5; // 50% reduction - massive speed boost
+      } else if (width > 8000 || height > 5000) {
+        scale = 0.65;
+      } else if (width > 5000 || height > 3000) {
+        scale = 0.8;
       }
 
-      print(
-          '✅ Image decoded successfully: ${fullImage.width}x${fullImage.height}');
+      width = (width * scale).clamp(1200.0, 15000.0);
+      height = (height * scale).clamp(900.0, 12000.0);
 
-      // Rest of your code continues...
+      final offsetX = (padding - minX) * scale;
+      final offsetY = (padding - minY) * scale;
 
-      // ✅ FIX: Generate PROPER thumbnail with aspect ratio
-      final thumbnailSize = 300;
-      final thumbnail = img.copyResize(
-        fullImage,
-        width: thumbnailSize,
-        height: thumbnailSize,
-        interpolation: img.Interpolation.linear,
-      );
-      final thumbnailBytes = Uint8List.fromList(img.encodePng(thumbnail));
+      // TURBO OPTIMIZATION 4: Direct rendering (zero overhead)
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      canvas.drawRect(
+          Rect.fromLTWH(0, 0, width, height), Paint()..color = Colors.white);
+      canvas.scale(scale);
+      canvas.translate(offsetX / scale, offsetY / scale);
 
-      // ✅ FIX: Re-encode full image to ensure it's valid
-      final reEncodedFullImage = Uint8List.fromList(img.encodePng(fullImage));
+      EnvelopeLayoutManager.reset();
+      _renderFullDiagram(canvas, root!, 1000, 100);
 
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(width.toInt(), height.toInt());
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      final pngBytes = byteData!.buffer.asUint8List();
+
+      // TURBO OPTIMIZATION 5: Skip thumbnail for speed
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final fileName = 'ofc_diagram_$timestamp.png';
-      final thumbFileName = 'ofc_thumb_$timestamp.png';
-
       String? fullImagePath;
-      String? thumbnailPath;
 
       if (kIsWeb) {
-        final blob = html.Blob([reEncodedFullImage], 'image/png');
+        final blob = html.Blob([pngBytes], 'image/png');
         final url = html.Url.createObjectUrlFromBlob(blob);
         final anchor = html.AnchorElement(href: url)
           ..setAttribute('download', fileName)
           ..click();
         html.Url.revokeObjectUrl(url);
       } else {
-        // ✅ FIX: Save to proper downloads directory
         Directory dir;
-
-        // Try external storage first
         try {
-          final externalDir = Directory('/storage/emulated/0/Download');
-          if (await externalDir.exists()) {
-            dir = externalDir;
-          } else {
-            dir = await getApplicationDocumentsDirectory();
-          }
+          final downloadsDir = Directory('/storage/emulated/0/Download');
+          dir = await downloadsDir.exists()
+              ? downloadsDir
+              : await getApplicationDocumentsDirectory();
         } catch (e) {
           dir = await getApplicationDocumentsDirectory();
         }
 
-        // After saving full image
         final fullFile = File('${dir.path}/$fileName');
-        await fullFile.writeAsBytes(reEncodedFullImage);
+        await fullFile.writeAsBytes(pngBytes);
         fullImagePath = fullFile.path;
-
-// ✅ Verify the file was saved correctly
-        await _verifyImageFile(fullImagePath);
-
-        print(
-            '✅ Full image saved: $fullImagePath (${reEncodedFullImage.length} bytes)');
       }
 
-      // ✅ Save to Hive with BOTH paths
-      final downloadsBox = await Hive.openBox('diagram_downloads');
-      await downloadsBox.add({
-        'name': _projectName ??
-            'OFC Diagram ${DateTime.now().toString().split('.').first}',
-        'fileName': fileName,
-        'date': DateTime.now().toIso8601String(),
-        'type': 'png',
-        'path': fullImagePath, // ✅ Full image path
-        'thumbnailPath': thumbnailPath, // ✅ Thumbnail path
-        'cloudUrl': null,
-        'headendName': _headendNameCtrl.text,
-        'headendPower':
-            double.tryParse(_headendDbmCtrl.text) ?? defaultHeadendDbm,
-        'wavelength': _selectedWavelength,
-        'useWdm': _useWdm,
-        'wdmLoss': _wdmLoss,
-        'wdmPower': double.tryParse(_wdmPowerCtrl.text) ?? 0.0,
-        'diagramTree': _serializeDiagramTree(root!),
-      });
+      // TURBO OPTIMIZATION 6: Ultra-fast Hive save (no blocking)
+      unawaited(Future.microtask(() async {
+        try {
+          final box = await Hive.openBox('diagram_downloads');
+          await box.add({
+            'name': _projectName ??
+                'OFC Diagram ${DateTime.now().toString().split('.').first}',
+            'fileName': fileName,
+            'date': DateTime.now().toIso8601String(),
+            'type': 'png',
+            'path': fullImagePath,
+            'imageBytes': pngBytes.length < 8000000 ? pngBytes : null,
+            'thumbnailBytes': null, // Skip for speed
+            'headendName': _headendNameCtrl.text,
+            'headendPower':
+                double.tryParse(_headendDbmCtrl.text) ?? defaultHeadendDbm,
+            'wavelength': _selectedWavelength,
+            'useWdm': _useWdm,
+            'wdmLoss': _wdmLoss,
+            'wdmPower': double.tryParse(_wdmPowerCtrl.text) ?? 0.0,
+            'diagramTree': _serializeDiagramTree(root!),
+          });
+        } catch (e) {
+          print('⚠️ Background save: $e');
+        }
+      }));
 
+      // Close dialog
+      if (isDialogShowing && mounted) {
+        Navigator.pop(context);
+        isDialogShowing = false;
+      }
+
+      // Success with confetti effect
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Row(
               children: [
-                Icon(Icons.check_circle, color: Colors.white),
-                SizedBox(width: 12),
+                Icon(Icons.check_circle, color: Colors.white, size: 28),
+                SizedBox(width: 16),
                 Expanded(
-                  child: Text(
-                    '✅ Diagram saved successfully!',
-                    style: TextStyle(fontWeight: FontWeight.w600),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '✅ Diagram Ready!',
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                      Text(
+                        kIsWeb
+                            ? 'Downloaded successfully'
+                            : 'Saved to Downloads',
+                        style: TextStyle(fontSize: 13),
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
-            backgroundColor: Colors.green,
+            backgroundColor: Color(0xFF4CAF50),
             duration: Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           ),
         );
       }
     } catch (e, stack) {
-      print('❌ Save error: $e\n$stack');
+      print('❌ Error: $e\n$stack');
+
+      if (isDialogShowing && mounted) {
+        Navigator.pop(context);
+        isDialogShowing = false;
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to save: ${e.toString()}'),
+            content: Text(
+                '❌ Generation failed: ${e.toString().substring(0, 40)}...'),
             backgroundColor: Colors.red,
             duration: Duration(seconds: 4),
           ),
         );
       }
-    } finally {
-      if (mounted) {
-        setState(() => _isSaving = false);
-      }
     }
   }
+
+  Size _calculateFullDiagramSize(DiagramNode root) {
+    final positions = <Offset>[];
+
+    void collectPositions(DiagramNode node, double x, double y,
+        {int level = 0}) {
+      if (level == 0) {
+        EnvelopeLayoutManager.reset();
+      }
+
+      // Record this node's position
+      positions.add(Offset(x, y));
+
+      // If leaf, add house icon position (extends below)
+      if (node.isLeaf && !node.isHeadend) {
+        positions.add(Offset(x, y + 150)); // House + text area
+      }
+
+      // Process children with EXACT layout logic
+      if (node.children.isNotEmpty) {
+        final count = node.children.length;
+        final xPositions = EnvelopeLayoutManager.calculateInitialPositions(
+          count: count,
+          parentX: x,
+        );
+
+        final childBaseY = y + EnvelopeLayoutManager.verticalSpacing;
+        final adjustedPositions =
+            EnvelopeLayoutManager.adjustForHorizontalCollisions(
+          positions: xPositions,
+          y: childBaseY,
+        );
+
+        for (int i = 0; i < count; i++) {
+          final child = node.children[i];
+          final childX = adjustedPositions[i];
+          final childY = EnvelopeLayoutManager.findFreeY(
+            xCenter: childX,
+            preferredY: childBaseY,
+            nodeId: child.id,
+          );
+
+          EnvelopeLayoutManager.reserveSpace(
+            xCenter: childX,
+            yTop: childY,
+            nodeId: child.id,
+          );
+
+          collectPositions(child, childX, childY, level: level + 1);
+        }
+      }
+
+      EnvelopeLayoutManager.reserveSpace(
+        xCenter: x,
+        yTop: y - EnvelopeLayoutManager.blockHeight / 2,
+        nodeId: node.id,
+      );
+    }
+
+    // Collect all positions starting from same position as rendering
+    EnvelopeLayoutManager.reset();
+    collectPositions(root, 1000, 100);
+
+    if (positions.isEmpty) {
+      return Size(2000, 1000);
+    }
+
+    // Find actual bounds from collected positions
+    double minX = positions.first.dx;
+    double maxX = positions.first.dx;
+    double minY = positions.first.dy;
+    double maxY = positions.first.dy;
+
+    for (final pos in positions) {
+      minX = math.min(minX, pos.dx);
+      maxX = math.max(maxX, pos.dx);
+      minY = math.min(minY, pos.dy);
+      maxY = math.max(maxY, pos.dy);
+    }
+
+    // Add padding for blocks (blocks extend 70px left/right, 60px top/bottom)
+    final blockPadding = 300.0; // Generous padding
+    final width = (maxX - minX + blockPadding * 2).clamp(1000.0, 25000.0);
+    final height = (maxY - minY + blockPadding * 2).clamp(800.0, 20000.0);
+
+    print('📏 Bounds: X[$minX → $maxX] Y[$minY → $maxY]');
+    print('📏 Canvas: ${width}x$height');
+
+    return Size(width, height);
+  }
+  // Replace the _captureUsingHtmlCanvas method:
 
   Future<Uint8List> _captureUsingHtmlCanvas() async {
     final size = _calculateDiagramSize(root!);
     final width = size.width.toInt();
     final height = size.height.toInt();
 
-    print('📐 Capturing diagram: ${width}x$height');
+    print('📐 Capturing FULL diagram: ${width}x$height');
 
-    // ✅ CRITICAL FIX: Use Flutter's rendering, NOT HTML canvas
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
 
@@ -3332,12 +3708,14 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       Paint()..color = Colors.white,
     );
 
-    // Render the actual diagram
-    final painter = _DiagramPainter(
-      root: root!,
-      highlightedNodes: [],
-    );
-    painter.paint(canvas, size);
+    // ✅ CRITICAL: Reset layout manager before rendering
+    EnvelopeLayoutManager.reset();
+
+    // Render the diagram starting from the CALCULATED center position
+    final startX = size.width / 2; // Center horizontally
+    final startY = 100.0; // Top margin
+
+    _renderFullDiagram(canvas, root!, startX, startY);
 
     // Convert to image
     final picture = recorder.endRecording();
@@ -3345,12 +3723,118 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
 
     final bytes = byteData!.buffer.asUint8List();
-    print('✅ Generated image: ${bytes.length} bytes');
+    print('✅ Generated FULL image: ${bytes.length} bytes');
 
     return bytes;
   }
 
-// ✅ MOBILE: Custom painter capture (fallback)
+  void _renderFullDiagram(Canvas canvas, DiagramNode node, double x, double y,
+      {int level = 0}) {
+    if (node.isHeadend && level == 0) {
+      EnvelopeLayoutManager.reset();
+    }
+
+    if (node.children.isNotEmpty) {
+      final count = node.children.length;
+      final xPositions = EnvelopeLayoutManager.calculateInitialPositions(
+        count: count,
+        parentX: x,
+      );
+
+      final childBaseY = y + EnvelopeLayoutManager.verticalSpacing;
+      final adjustedPositions =
+          EnvelopeLayoutManager.adjustForHorizontalCollisions(
+        positions: xPositions,
+        y: childBaseY,
+      );
+
+      for (int i = 0; i < count; i++) {
+        final child = node.children[i];
+        final childX = adjustedPositions[i];
+        final childY = EnvelopeLayoutManager.findFreeY(
+          xCenter: childX,
+          preferredY: childBaseY,
+          nodeId: child.id,
+        );
+
+        EnvelopeLayoutManager.reserveSpace(
+          xCenter: childX,
+          yTop: childY,
+          nodeId: child.id,
+        );
+
+        _drawConnectionForCapture(canvas, x, y, childX, childY, child);
+        _renderFullDiagram(canvas, child, childX, childY, level: level + 1);
+      }
+    }
+
+    _drawNodeForCapture(canvas, x, y, node);
+
+    EnvelopeLayoutManager.reserveSpace(
+      xCenter: x,
+      yTop: y - EnvelopeLayoutManager.blockHeight / 2,
+      nodeId: node.id,
+    );
+
+    if (node.isLeaf && !node.isHeadend) {
+      _drawHouseForCapture(canvas, Offset(x, y + 100), node);
+    }
+  }
+
+// Add helper methods for drawing:
+  void _drawConnectionForCapture(Canvas canvas, double parentX, double parentY,
+      double childX, double childY, DiagramNode child) {
+    final paintLine = Paint()
+      ..color = Color(0xFF757575)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5;
+
+    final trunkY = parentY + 60;
+    final blockTop = childY - 70;
+
+    // Simple connection without collision detection for speed
+    canvas.drawLine(
+        Offset(parentX, trunkY), Offset(parentX, trunkY + 60), paintLine);
+    canvas.drawLine(
+        Offset(parentX, trunkY + 60), Offset(childX, trunkY + 60), paintLine);
+    canvas.drawLine(
+        Offset(childX, trunkY + 60), Offset(childX, blockTop), paintLine);
+
+    // Arrow
+    final arrowPath = Path()
+      ..moveTo(childX, blockTop)
+      ..lineTo(childX - 6, blockTop - 10)
+      ..lineTo(childX + 6, blockTop - 10)
+      ..close();
+    canvas.drawPath(
+        arrowPath,
+        Paint()
+          ..color = Color(0xFF757575)
+          ..style = PaintingStyle.fill);
+  }
+
+  void _drawNodeForCapture(
+      Canvas canvas, double x, double y, DiagramNode node) {
+    // Use the existing painter's draw methods
+    final painter = _DiagramPainter(root: root!, highlightedNodes: []);
+
+    if (node.isHeadend) {
+      painter._drawHeadendBlock(canvas, x, y, node);
+    } else if (node.isCouplerOutput) {
+      painter._drawCouplerBlock(canvas, x, y, node);
+    } else if (node.isSplitterOutput) {
+      painter._drawSplitterBlock(canvas, x, y, node);
+    } else {
+      painter._drawStandardBlock(canvas, x, y, node);
+    }
+  }
+
+  void _drawHouseForCapture(Canvas canvas, Offset center, DiagramNode node) {
+    final painter = _DiagramPainter(root: root!, highlightedNodes: []);
+    painter._drawHouseIcon(canvas, center, node);
+  }
+// Also update _captureUsingCustomPainter with the same approach:
+
   Future<Uint8List> _captureUsingCustomPainter() async {
     final size = _calculateDiagramSize(root!);
     final recorder = ui.PictureRecorder();
@@ -3362,12 +3846,11 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
       Paint()..color = Colors.white,
     );
 
-    // Render diagram
-    final painter = _DiagramPainter(
-      root: root!,
-      highlightedNodes: [],
-    );
-    painter.paint(canvas, size);
+    // ✅ Reset and render full diagram
+    EnvelopeLayoutManager.reset();
+    final startX = size.width / 2;
+    final startY = 100.0;
+    _renderFullDiagram(canvas, root!, startX, startY);
 
     // Convert to image
     final picture = recorder.endRecording();
@@ -3378,6 +3861,8 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     return byteData!.buffer.asUint8List();
   }
 
+  // In _OFCDiagramPageState class, replace _calculateDiagramSize:
+
   Size _calculateDiagramSize(DiagramNode root) {
     double minX = double.infinity;
     double maxX = double.negativeInfinity;
@@ -3385,11 +3870,11 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     double maxY = double.negativeInfinity;
 
     void traverse(DiagramNode node, double x, double y) {
-      // Track bounds with proper padding
-      minX = math.min(minX, x - 100);
-      maxX = math.max(maxX, x + 100);
-      minY = math.min(minY, y - 80);
-      maxY = math.max(maxY, y + 150); // Extra space for house icons
+      // Track all positions
+      minX = math.min(minX, x - 300);
+      maxX = math.max(maxX, x + 300);
+      minY = math.min(minY, y - 200);
+      maxY = math.max(maxY, y + 350);
 
       if (node.children.isNotEmpty) {
         final count = node.children.length;
@@ -3421,11 +3906,11 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
     EnvelopeLayoutManager.reset();
     traverse(root, 3000, 100);
 
-    // Add minimum padding
-    final width = (maxX - minX + 200).clamp(800.0, 15000.0);
-    final height = (maxY - minY + 200).clamp(600.0, 10000.0);
+    // Add generous padding
+    final width = (maxX - minX + 600).clamp(1500.0, 25000.0);
+    final height = (maxY - minY + 600).clamp(1000.0, 20000.0);
 
-    print('📏 Calculated diagram size: ${width}x$height');
+    print('📏 Full diagram size: ${width}x$height');
     return Size(width, height);
   }
 
@@ -3535,6 +4020,26 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
         foregroundColor: Colors.white,
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
+          // Undo button
+          IconButton(
+            onPressed: _historyIndex > 0 ? _undo : null,
+            icon: Icon(
+              Icons.undo,
+              color: _historyIndex > 0 ? Colors.white70 : Colors.white24,
+            ),
+            tooltip: 'Undo',
+          ),
+          // Redo button
+          IconButton(
+            onPressed: _historyIndex < _historyStack.length - 1 ? _redo : null,
+            icon: Icon(
+              Icons.redo,
+              color: _historyIndex < _historyStack.length - 1
+                  ? Colors.white70
+                  : Colors.white24,
+            ),
+            tooltip: 'Redo',
+          ),
           IconButton(
             onPressed: () {
               setState(() {
@@ -3542,6 +4047,8 @@ class _OFCDiagramPageState extends State<OFCDiagramPage> {
                 _initRoot();
                 _searchController.clear();
                 _searchQuery = '';
+                _historyStack.clear();
+                _historyIndex = -1;
               });
             },
             icon: const Icon(Icons.refresh, color: Colors.white70),
@@ -4260,6 +4767,130 @@ class _DiagramPainter extends CustomPainter {
     return true;
   }
 
+  void _drawRoutedPath(
+    Canvas canvas,
+    Paint paint,
+    double startX,
+    double startY,
+    double endX,
+    double endY,
+    List<OccupiedEnvelope> zones,
+    int childId,
+  ) {
+    // Find safe routing levels
+    double routeAboveY = startY - 60;
+    double routeBelowY = startY + 60;
+
+    bool canRouteAbove =
+        _isHorizontalPathClear(startX, endX, routeAboveY, zones, childId);
+    bool canRouteBelow =
+        _isHorizontalPathClear(startX, endX, routeBelowY, zones, childId);
+
+    if (canRouteAbove) {
+      // Route above obstacles
+      canvas.drawLine(
+          Offset(startX, startY), Offset(startX, routeAboveY), paint);
+      canvas.drawLine(
+          Offset(startX, routeAboveY), Offset(endX, routeAboveY), paint);
+      canvas.drawLine(Offset(endX, routeAboveY), Offset(endX, endY), paint);
+    } else if (canRouteBelow) {
+      // Route below obstacles
+      canvas.drawLine(
+          Offset(startX, startY), Offset(startX, routeBelowY), paint);
+      canvas.drawLine(
+          Offset(startX, routeBelowY), Offset(endX, routeBelowY), paint);
+      canvas.drawLine(Offset(endX, routeBelowY), Offset(endX, endY), paint);
+    } else {
+      // Complex routing - find gaps
+      _drawComplexRoute(
+          canvas, paint, startX, startY, endX, endY, zones, childId);
+    }
+  }
+
+// Add this helper method:
+
+  bool _isHorizontalPathClear(
+    double x1,
+    double x2,
+    double y,
+    List<OccupiedEnvelope> zones,
+    int childId,
+  ) {
+    final minX = math.min(x1, x2);
+    final maxX = math.max(x1, x2);
+
+    for (final zone in zones) {
+      if (zone.nodeId == childId) continue;
+
+      final xOverlap = !(maxX < zone.xStart || minX > zone.xEnd);
+      final yOverlap = y >= zone.yTop - 10 && y <= zone.yBottom + 10;
+
+      if (xOverlap && yOverlap) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+// Add this for complex multi-segment routing:
+
+  void _drawComplexRoute(
+    Canvas canvas,
+    Paint paint,
+    double startX,
+    double startY,
+    double endX,
+    double endY,
+    List<OccupiedEnvelope> zones,
+    int childId,
+  ) {
+    // Staircase routing - go around obstacles in steps
+    List<Offset> waypoints = [Offset(startX, startY)];
+
+    double currentX = startX;
+    double currentY = startY;
+    final targetX = endX;
+    final targetY = endY;
+
+    // Move in steps: vertical -> horizontal -> vertical
+    final stepCount = 5;
+    final xStep = (targetX - currentX) / stepCount;
+    final yStep = 40.0;
+
+    for (int i = 0; i < stepCount; i++) {
+      // Try moving down first
+      double nextY = currentY + yStep;
+
+      // Check if this Y level is clear for horizontal movement
+      double nextX = currentX + xStep;
+
+      if (_isHorizontalPathClear(currentX, nextX, nextY, zones, childId)) {
+        waypoints.add(Offset(currentX, nextY));
+        waypoints.add(Offset(nextX, nextY));
+        currentX = nextX;
+        currentY = nextY;
+      } else {
+        // Try going up instead
+        nextY = currentY - yStep;
+        if (_isHorizontalPathClear(currentX, nextX, nextY, zones, childId)) {
+          waypoints.add(Offset(currentX, nextY));
+          waypoints.add(Offset(nextX, nextY));
+          currentX = nextX;
+          currentY = nextY;
+        }
+      }
+    }
+
+    // Final segment to target
+    waypoints.add(Offset(targetX, currentY));
+    waypoints.add(Offset(targetX, targetY));
+
+    // Draw all segments
+    for (int i = 0; i < waypoints.length - 1; i++) {
+      canvas.drawLine(waypoints[i], waypoints[i + 1], paint);
+    }
+  }
+
   void _drawRoutedConnection(
     Canvas canvas,
     Paint paint,
@@ -4346,6 +4977,22 @@ class _DiagramPainter extends CustomPainter {
     }
   }
 
+  // Add this helper method to get unique colors for each path
+  Color _getPathColor(DiagramNode node, int depth) {
+    final colors = [
+      Color(0xFF1976D2), // Blue
+      Color(0xFFE91E63), // Pink
+      Color(0xFF4CAF50), // Green
+      Color(0xFFFF9800), // Orange
+      Color(0xFF9C27B0), // Purple
+      Color(0xFF00BCD4), // Cyan
+      Color(0xFFFFEB3B), // Yellow
+      Color(0xFF795548), // Brown
+    ];
+
+    return colors[(node.id + depth) % colors.length];
+  }
+
   void _drawSmartConnection(
     Canvas canvas,
     double parentX,
@@ -4354,77 +5001,115 @@ class _DiagramPainter extends CustomPainter {
     double childY,
     DiagramNode child,
   ) {
+    // ❌ REMOVED: Use neutral gray for ALL connection lines
     final paintLine = Paint()
-      ..color = const Color(0xFF424242)
+      ..color = Color(0xFF757575) // Neutral gray
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.5;
 
-    final trunkY = parentY + 45;
-    final splitY = parentY + 165;
-    final blockTop = childY - 55;
-
+    final trunkY = parentY + 60;
+    final blockTop = childY - 70;
     final zones = EnvelopeLayoutManager.getOccupiedZones();
 
-    // Vertical line from parent
+    // 1. Vertical drop from parent
     canvas.drawLine(
-        Offset(parentX, trunkY), Offset(parentX, splitY), paintLine);
+      Offset(parentX, trunkY),
+      Offset(parentX, trunkY + 60),
+      paintLine,
+    );
 
-    final horizontalPath = _isPathClear(parentX, childX, splitY, zones);
+    // 2. Find safe horizontal routing level
+    double routeY = trunkY + 120;
+    bool foundSafe = false;
 
-    if (horizontalPath) {
-      // Direct horizontal connection
-      canvas.drawLine(
-          Offset(parentX, splitY), Offset(childX, splitY), paintLine);
-      canvas.drawLine(
-          Offset(childX, splitY), Offset(childX, blockTop), paintLine);
-    } else {
-      // Route around obstacles
-      _drawRoutedConnection(
-          canvas, paintLine, parentX, splitY, childX, blockTop, zones);
+    for (int attempt = 0; attempt < 30; attempt++) {
+      bool clear = true;
+
+      for (final zone in zones) {
+        if (zone.nodeId == child.id || zone.nodeId == child.parentId) continue;
+
+        final minX = math.min(parentX, childX);
+        final maxX = math.max(parentX, childX);
+
+        if (zone.overlapsWith(minX - 50, maxX + 50, routeY - 20, routeY + 20)) {
+          clear = false;
+          break;
+        }
+      }
+
+      if (clear) {
+        foundSafe = true;
+        break;
+      }
+      routeY += 40;
     }
 
-    // ✅ FIX: Draw arrow at END of line (at child block top)
+    // 3. Route to horizontal level
+    canvas.drawLine(
+      Offset(parentX, trunkY + 60),
+      Offset(parentX, routeY),
+      paintLine,
+    );
+
+    // 4. Horizontal routing
+    canvas.drawLine(
+      Offset(parentX, routeY),
+      Offset(childX, routeY),
+      paintLine,
+    );
+
+    // 5. Drop to child
+    canvas.drawLine(
+      Offset(childX, routeY),
+      Offset(childX, blockTop),
+      paintLine,
+    );
+
+    // 6. Arrow at child - use neutral color
     final arrowPath = Path();
     arrowPath.moveTo(childX, blockTop);
-    arrowPath.lineTo(childX - 5, blockTop - 8);
-    arrowPath.lineTo(childX + 5, blockTop - 8);
+    arrowPath.lineTo(childX - 6, blockTop - 10);
+    arrowPath.lineTo(childX + 6, blockTop - 10);
     arrowPath.close();
 
     canvas.drawPath(
       arrowPath,
       Paint()
-        ..color = const Color(0xFF1976D2)
+        ..color = Color(0xFF757575) // Neutral gray arrow
         ..style = PaintingStyle.fill,
     );
 
-    // Draw distance label
+    // 7. Distance label with neutral background
     if (child.distance > 0) {
       String distanceText = child.distance < 1.0
           ? '${(child.distance * 1000).toStringAsFixed(0)}m'
           : '${child.distance.toStringAsFixed(2)}km';
 
-      final distanceTp =
-          _text(distanceText, 10, Colors.white, fontWeight: FontWeight.bold);
+      final distanceTp = _text(
+        distanceText,
+        11,
+        Colors.white,
+        fontWeight: FontWeight.bold,
+      );
+
+      final labelX = (parentX + childX) / 2;
+      final labelY = routeY - 15;
+
       final bgRect = Rect.fromCenter(
-        center: Offset(childX, splitY),
-        width: distanceTp.width + 16,
-        height: 20,
+        center: Offset(labelX, labelY),
+        width: distanceTp.width + 20,
+        height: 22,
       );
 
-      final gradient = const LinearGradient(
-        colors: [Color(0xFF1976D2), Color(0xFF0D47A1)],
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-      );
-
+      // Neutral gray background
       canvas.drawRRect(
-        RRect.fromRectAndRadius(bgRect, const Radius.circular(10)),
-        Paint()..shader = gradient.createShader(bgRect),
+        RRect.fromRectAndRadius(bgRect, Radius.circular(11)),
+        Paint()..color = Color(0xFF616161),
       );
 
       distanceTp.paint(
         canvas,
-        Offset(childX - distanceTp.width / 2, splitY - distanceTp.height / 2),
+        Offset(labelX - distanceTp.width / 2, labelY - distanceTp.height / 2),
       );
     }
   }
@@ -4629,8 +5314,8 @@ class _DiagramPainter extends CustomPainter {
   }
 
   void _drawHeadendBlock(Canvas canvas, double x, double y, DiagramNode node) {
-    final blockWidth = 140.0; // Slightly wider
-    final blockHeight = 72.0; // Increased for consistency
+    final blockWidth = 140.0;
+    final blockHeight = 72.0;
     final headerHeight = 22.0;
 
     // Shadow
@@ -4639,68 +5324,90 @@ class _DiagramPainter extends CustomPainter {
           center: Offset(x + 2, y + 4), width: blockWidth, height: blockHeight),
       const Radius.circular(6),
     );
-    canvas.drawRRect(
-        shadowRect,
-        Paint()
-          ..color = const Color(0x33000000)
-          ..style = PaintingStyle.fill);
+    canvas.drawRRect(shadowRect, Paint()..color = const Color(0x33000000));
 
     final mainRect = RRect.fromRectAndRadius(
-        Rect.fromCenter(
-            center: Offset(x, y), width: blockWidth, height: blockHeight),
-        const Radius.circular(6));
+      Rect.fromCenter(
+          center: Offset(x, y), width: blockWidth, height: blockHeight),
+      const Radius.circular(6),
+    );
 
-    final headerRect = RRect.fromRectAndRadius(
-        Rect.fromCenter(
-            center: Offset(x, y - blockHeight / 2 + headerHeight / 2),
-            width: blockWidth,
-            height: headerHeight),
-        const Radius.circular(6));
-
-    final headerGradient = LinearGradient(
-      colors: [Color(0xFF1976D2), Color(0xFF0D47A1)],
-      begin: Alignment.topLeft,
-      end: Alignment.bottomRight,
+    // ✅ FULL GREEN GRADIENT for entire block
+    final blockGradient = LinearGradient(
+      colors: [Color(0xFF43A047), Color(0xFF2E7D32)], // Green gradient
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
     );
 
     canvas.drawRRect(
-        headerRect,
-        Paint()
-          ..shader = headerGradient.createShader(Rect.fromCenter(
-              center: Offset(x, y - blockHeight / 2 + headerHeight / 2),
-              width: blockWidth,
-              height: headerHeight)));
+      mainRect,
+      Paint()
+        ..shader = blockGradient.createShader(
+          Rect.fromCenter(
+            center: Offset(x, y),
+            width: blockWidth,
+            height: blockHeight,
+          ),
+        ),
+    );
+
+    // Green border
+    canvas.drawRRect(
+      mainRect,
+      Paint()
+        ..color = Color(0xFF1B5E20) // Darker green border
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0,
+    );
+
+    // Header section (darker green strip at top)
+    final headerRect = RRect.fromRectAndRadius(
+      Rect.fromCenter(
+        center: Offset(x, y - blockHeight / 2 + headerHeight / 2),
+        width: blockWidth,
+        height: headerHeight,
+      ),
+      const Radius.circular(6),
+    );
 
     canvas.drawRRect(
-        mainRect,
-        Paint()
-          ..color = Colors.white
-          ..style = PaintingStyle.fill);
-    canvas.drawRRect(
-        mainRect,
-        Paint()
-          ..color = Color(0xFF1976D2)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.0);
+      headerRect,
+      Paint()..color = Color(0xFF2E7D32).withOpacity(0.5), // Darker overlay
+    );
 
-    // Header text - always show "Headend"
+    // Header text (WHITE)
     final headerTp =
         _text('Headend', 11, Colors.white, fontWeight: FontWeight.bold);
     headerTp.paint(
-        canvas,
-        Offset(x - headerTp.width / 2,
-            y - blockHeight / 2 + headerHeight / 2 - headerTp.height / 2));
+      canvas,
+      Offset(x - headerTp.width / 2,
+          y - blockHeight / 2 + headerHeight / 2 - headerTp.height / 2),
+    );
 
-    // Body content - Name and Power
+    // Body - Name (WHITE)
     String displayName = node.label.isEmpty ? 'EDFA' : node.label;
     final nameTp =
-        _text(displayName, 12, Colors.black87, fontWeight: FontWeight.w600);
+        _text(displayName, 12, Colors.white, fontWeight: FontWeight.w600);
     nameTp.paint(canvas, Offset(x - nameTp.width / 2, y - 10));
 
+    // Power (WHITE with slight glow effect)
     final powerTp = _text(
-        '${node.signal.toStringAsFixed(1)} dBm', 13, Color(0xFF4CAF50),
+        '${node.signal.toStringAsFixed(1)} dBm', 13, Colors.white,
         fontWeight: FontWeight.bold);
-    powerTp.paint(canvas, Offset(x - powerTp.width / 2, y + 10));
+
+    // Optional: Add background for power text for better visibility
+    final powerBgRect = Rect.fromCenter(
+      center: Offset(x, y + 10),
+      width: powerTp.width + 16,
+      height: 20,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(powerBgRect, Radius.circular(10)),
+      Paint()..color = Color(0xFF1B5E20).withOpacity(0.4),
+    );
+
+    powerTp.paint(
+        canvas, Offset(x - powerTp.width / 2, y + 10 - powerTp.height / 2));
   }
 
   void _drawCouplerBlock(Canvas canvas, double x, double y, DiagramNode node) {
@@ -4709,17 +5416,15 @@ class _DiagramPainter extends CustomPainter {
         node.useWdm && node.wdmOutputPower != 0.0 ? 105.0 : 90.0;
     final headerHeight = 22.0;
 
+    final flowColor = node.flowColor ?? Color(0xFFFF8F00);
+
     // Shadow
     final shadowRect = RRect.fromRectAndRadius(
       Rect.fromCenter(
           center: Offset(x + 2, y + 4), width: blockWidth, height: blockHeight),
       const Radius.circular(6),
     );
-    canvas.drawRRect(
-        shadowRect,
-        Paint()
-          ..color = const Color(0x33000000)
-          ..style = PaintingStyle.fill);
+    canvas.drawRRect(shadowRect, Paint()..color = const Color(0x33000000));
 
     final mainRect = RRect.fromRectAndRadius(
       Rect.fromCenter(
@@ -4727,68 +5432,55 @@ class _DiagramPainter extends CustomPainter {
       const Radius.circular(6),
     );
 
+    // 🎨 FULL BACKGROUND COLOR (30% opacity)
+    canvas.drawRRect(
+      mainRect,
+      Paint()..color = flowColor.withOpacity(0.3),
+    );
+
+    // Header with darker flow color
     final headerRect = RRect.fromRectAndRadius(
       Rect.fromCenter(
-          center: Offset(x, y - blockHeight / 2 + headerHeight / 2),
-          width: blockWidth,
-          height: headerHeight),
+        center: Offset(x, y - blockHeight / 2 + headerHeight / 2),
+        width: blockWidth,
+        height: headerHeight,
+      ),
       const Radius.circular(6),
     );
 
-    final headerGradient = const LinearGradient(
-      colors: [Color(0xFFFF8F00), Color(0xFFEF6C00)],
-      begin: Alignment.topLeft,
-      end: Alignment.bottomRight,
+    canvas.drawRRect(headerRect, Paint()..color = flowColor);
+
+    // Border with flow color
+    canvas.drawRRect(
+      mainRect,
+      Paint()
+        ..color = flowColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5,
     );
 
-    canvas.drawRRect(
-        headerRect,
-        Paint()
-          ..shader = headerGradient.createShader(Rect.fromCenter(
-              center: Offset(x, y - blockHeight / 2 + headerHeight / 2),
-              width: blockWidth,
-              height: headerHeight)));
-
-    canvas.drawRRect(
-        mainRect,
-        Paint()
-          ..color = Colors.white
-          ..style = PaintingStyle.fill);
-    canvas.drawRRect(
-        mainRect,
-        Paint()
-          ..color = const Color(0xFFFF8F00)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.0);
-
+    // Header text
     final label = node.label.isEmpty ? 'Coupler' : node.label;
     final nameTp = _text(label, 10, Colors.white, fontWeight: FontWeight.bold);
 
-    if (nameTp.width > blockWidth - 10) {
-      final shorterTp =
-          _text(label, 8, Colors.white, fontWeight: FontWeight.bold);
-      shorterTp.paint(
-          canvas,
-          Offset(x - shorterTp.width / 2,
-              y - blockHeight / 2 + headerHeight / 2 - shorterTp.height / 2));
-    } else {
-      nameTp.paint(
-          canvas,
-          Offset(x - nameTp.width / 2,
-              y - blockHeight / 2 + headerHeight / 2 - nameTp.height / 2));
-    }
+    nameTp.paint(
+      canvas,
+      Offset(x - nameTp.width / 2,
+          y - blockHeight / 2 + headerHeight / 2 - nameTp.height / 2),
+    );
 
+    // Content
     double contentY = y - 22;
     final sideRatio = node.couplerRatio ?? 50;
-    final ratioTp = _text('$sideRatio', 13, const Color(0xFFEF6C00),
-        fontWeight: FontWeight.bold);
+    final ratioTp =
+        _text('$sideRatio', 13, flowColor, fontWeight: FontWeight.bold);
     ratioTp.paint(canvas, Offset(x - ratioTp.width / 2, contentY));
 
     contentY += 16;
     final inputPowerText =
         'In: ${_getParentPower(node).toStringAsFixed(1)} dBm';
     final inputTp =
-        _text(inputPowerText, 8, Colors.black54, fontWeight: FontWeight.w500);
+        _text(inputPowerText, 8, Colors.black87, fontWeight: FontWeight.w500);
     inputTp.paint(canvas, Offset(x - inputTp.width / 2, contentY));
 
     contentY += 14;
@@ -4800,10 +5492,12 @@ class _DiagramPainter extends CustomPainter {
       contentY += 14;
     }
 
-    final finalPower = node.signal;
-    final powerTp = _text('${finalPower.toStringAsFixed(1)} dBm', 11,
-        const Color.fromARGB(255, 99, 114, 243),
-        fontWeight: FontWeight.bold);
+    final powerTp = _text(
+      '${node.signal.toStringAsFixed(1)} dBm',
+      11,
+      Colors.black87,
+      fontWeight: FontWeight.bold,
+    );
     powerTp.paint(canvas, Offset(x - powerTp.width / 2, contentY));
   }
 
@@ -4837,16 +5531,15 @@ class _DiagramPainter extends CustomPainter {
         node.useWdm && node.wdmOutputPower != 0.0 ? 105.0 : 90.0;
     final headerHeight = 22.0;
 
+    final flowColor = node.flowColor ?? Color(0xFF7B1FA2);
+
+    // Shadow
     final shadowRect = RRect.fromRectAndRadius(
       Rect.fromCenter(
           center: Offset(x + 2, y + 4), width: blockWidth, height: blockHeight),
       const Radius.circular(6),
     );
-    canvas.drawRRect(
-        shadowRect,
-        Paint()
-          ..color = const Color(0x33000000)
-          ..style = PaintingStyle.fill);
+    canvas.drawRRect(shadowRect, Paint()..color = const Color(0x33000000));
 
     final mainRect = RRect.fromRectAndRadius(
       Rect.fromCenter(
@@ -4854,65 +5547,46 @@ class _DiagramPainter extends CustomPainter {
       const Radius.circular(6),
     );
 
+    // 🎨 FULL BACKGROUND COLOR (30% opacity)
+    canvas.drawRRect(
+      mainRect,
+      Paint()..color = flowColor.withOpacity(0.3),
+    );
+
+    // Header with darker flow color
     final headerRect = RRect.fromRectAndRadius(
       Rect.fromCenter(
-          center: Offset(x, y - blockHeight / 2 + headerHeight / 2),
-          width: blockWidth,
-          height: headerHeight),
+        center: Offset(x, y - blockHeight / 2 + headerHeight / 2),
+        width: blockWidth,
+        height: headerHeight,
+      ),
       const Radius.circular(6),
     );
 
-    final headerGradient = const LinearGradient(
-      colors: [Color(0xFF7B1FA2), Color(0xFF4A148C)],
-      begin: Alignment.topLeft,
-      end: Alignment.bottomRight,
-    );
+    canvas.drawRRect(headerRect, Paint()..color = flowColor);
 
+    // Border with flow color
     canvas.drawRRect(
-      headerRect,
+      mainRect,
       Paint()
-        ..shader = headerGradient.createShader(Rect.fromCenter(
-          center: Offset(x, y - blockHeight / 2 + headerHeight / 2),
-          width: blockWidth,
-          height: headerHeight,
-        )),
+        ..color = flowColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5,
     );
 
-    canvas.drawRRect(
-        mainRect,
-        Paint()
-          ..color = Colors.white
-          ..style = PaintingStyle.fill);
-    canvas.drawRRect(
-        mainRect,
-        Paint()
-          ..color = const Color(0xFF7B1FA2)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.0);
-
-    // ❌ REMOVED ARROW - arrows now only at line ends
-
-    double contentY = y - 22;
+    // Header text
     final displayName = node.label.isEmpty ? 'Splitter' : node.label;
     final nameTp =
         _text(displayName, 10, Colors.white, fontWeight: FontWeight.bold);
 
-    if (nameTp.width > blockWidth - 10) {
-      final shorterTp =
-          _text(displayName, 8, Colors.white, fontWeight: FontWeight.bold);
-      shorterTp.paint(
-        canvas,
-        Offset(x - shorterTp.width / 2,
-            y - blockHeight / 2 + headerHeight / 2 - shorterTp.height / 2),
-      );
-    } else {
-      nameTp.paint(
-        canvas,
-        Offset(x - nameTp.width / 2,
-            y - blockHeight / 2 + headerHeight / 2 - nameTp.height / 2),
-      );
-    }
+    nameTp.paint(
+      canvas,
+      Offset(x - nameTp.width / 2,
+          y - blockHeight / 2 + headerHeight / 2 - nameTp.height / 2),
+    );
 
+    // Content
+    double contentY = y - 22;
     String splitInfo = '1x?';
     if (node.deviceConfig != null) {
       final parts = node.deviceConfig!.split('::');
@@ -4921,19 +5595,19 @@ class _DiagramPainter extends CustomPainter {
         splitInfo = '1x$split';
       }
     }
-    final splitTp = _text(splitInfo, 13, const Color(0xFF7B1FA2),
-        fontWeight: FontWeight.bold);
+
+    final splitTp =
+        _text(splitInfo, 13, flowColor, fontWeight: FontWeight.bold);
     splitTp.paint(canvas, Offset(x - splitTp.width / 2, contentY));
 
     contentY += 16;
     final inputPowerText =
         'In: ${_getParentPower(node).toStringAsFixed(1)} dBm';
     final inputTp =
-        _text(inputPowerText, 8, Colors.black54, fontWeight: FontWeight.w500);
+        _text(inputPowerText, 8, Colors.black87, fontWeight: FontWeight.w500);
     inputTp.paint(canvas, Offset(x - inputTp.width / 2, contentY));
 
     contentY += 14;
-
     if (node.useWdm && node.wdmOutputPower != 0.0) {
       final wdmText = 'WDM: ${node.wdmOutputPower.toStringAsFixed(1)} dBm';
       final wdmTp = _text(wdmText, 8, Colors.purple.shade700,
@@ -4942,10 +5616,12 @@ class _DiagramPainter extends CustomPainter {
       contentY += 14;
     }
 
-    final finalPower = node.signal;
-    final powerTp = _text('${finalPower.toStringAsFixed(1)} dBm', 11,
-        const Color.fromARGB(255, 96, 116, 229),
-        fontWeight: FontWeight.bold);
+    final powerTp = _text(
+      '${node.signal.toStringAsFixed(1)} dBm',
+      11,
+      Colors.black87,
+      fontWeight: FontWeight.bold,
+    );
     powerTp.paint(canvas, Offset(x - powerTp.width / 2, contentY));
   }
 
@@ -4954,73 +5630,59 @@ class _DiagramPainter extends CustomPainter {
     final blockHeight = 72.0;
     final headerHeight = 22.0;
 
-    // Draw main rectangle
+    final flowColor = node.flowColor ?? Color(0xFF1A237E);
+
     final mainRect = RRect.fromRectAndRadius(
-        Rect.fromCenter(
-            center: Offset(x, y), width: blockWidth, height: blockHeight),
-        const Radius.circular(6));
-
-    // Draw header background (dark blue)
-    final headerRect = RRect.fromRectAndRadius(
-        Rect.fromCenter(
-            center: Offset(x, y - blockHeight / 2 + headerHeight / 2),
-            width: blockWidth,
-            height: headerHeight),
-        const Radius.circular(6));
-
-    final headerGradient = LinearGradient(
-      colors: [Color(0xFF1A237E), Color(0xFF0D47A1)],
-      begin: Alignment.topLeft,
-      end: Alignment.bottomRight,
+      Rect.fromCenter(
+          center: Offset(x, y), width: blockWidth, height: blockHeight),
+      const Radius.circular(6),
     );
 
+    // 🎨 FULL BACKGROUND COLOR (30% opacity)
     canvas.drawRRect(
-        headerRect,
-        Paint()
-          ..shader = headerGradient.createShader(Rect.fromCenter(
-              center: Offset(x, y - blockHeight / 2 + headerHeight / 2),
-              width: blockWidth,
-              height: headerHeight)));
+      mainRect,
+      Paint()..color = flowColor.withOpacity(0.3),
+    );
 
-    // Draw main background
+    // Header with darker flow color
+    final headerRect = RRect.fromRectAndRadius(
+      Rect.fromCenter(
+        center: Offset(x, y - blockHeight / 2 + headerHeight / 2),
+        width: blockWidth,
+        height: headerHeight,
+      ),
+      const Radius.circular(6),
+    );
+
+    canvas.drawRRect(headerRect, Paint()..color = flowColor);
+
+    // Border with flow color
     canvas.drawRRect(
-        mainRect,
-        Paint()
-          ..color = Colors.white
-          ..style = PaintingStyle.fill);
+      mainRect,
+      Paint()
+        ..color = flowColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5,
+    );
 
-    // Draw border
-    canvas.drawRRect(
-        mainRect,
-        Paint()
-          ..color = const Color(0xFF1A237E)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.0);
-
-    // Header text - node name - JUST display the label as-is
+    // Header text
     final displayName = node.label.isEmpty ? 'Node' : node.label;
     final nameTp =
         _text(displayName, 10, Colors.white, fontWeight: FontWeight.bold);
 
-    // Adjust font size if name is too long
-    if (nameTp.width > blockWidth - 10) {
-      final shorterTp =
-          _text(displayName, 8, Colors.white, fontWeight: FontWeight.bold);
-      shorterTp.paint(
-          canvas,
-          Offset(x - shorterTp.width / 2,
-              y - blockHeight / 2 + headerHeight / 2 - shorterTp.height / 2));
-    } else {
-      nameTp.paint(
-          canvas,
-          Offset(x - nameTp.width / 2,
-              y - blockHeight / 2 + headerHeight / 2 - nameTp.height / 2));
-    }
+    nameTp.paint(
+      canvas,
+      Offset(x - nameTp.width / 2,
+          y - blockHeight / 2 + headerHeight / 2 - nameTp.height / 2),
+    );
 
-    // Main content - power value
+    // Power value
     final powerTp = _text(
-        '${node.signal.toStringAsFixed(1)} dBm', 12, Colors.black87,
-        fontWeight: FontWeight.bold);
+      '${node.signal.toStringAsFixed(1)} dBm',
+      12,
+      Colors.black87,
+      fontWeight: FontWeight.bold,
+    );
     powerTp.paint(canvas, Offset(x - powerTp.width / 2, y + 5));
   }
 
