@@ -266,7 +266,7 @@ class CouplerSplitterOnePage extends StatefulWidget {
 }
 
 class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
-  final TextEditingController _couplerCtrl = TextEditingController(text: "1.0");
+  final TextEditingController _couplerCtrl = TextEditingController(text: "0.0");
   final TextEditingController _wdmCtrl = TextEditingController(text: "0.0");
 
   List<Map<String, dynamic>> _couplerResults = [];
@@ -282,6 +282,9 @@ class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
   final Color _cardBg = const Color(0xFFF8FAFC);
   final Color _textPrimary = const Color(0xFF1E293B);
   final Color _textSecondary = const Color(0xFF64748B);
+
+  // In CouplerSplitterOnePage (_CouplerSplitterOnePageState class)
+// Replace _onCalculate method:
 
   void _onCalculate() {
     final couplerValue = double.tryParse(_couplerCtrl.text.trim());
@@ -308,15 +311,10 @@ class _CouplerSplitterOnePageState extends State<CouplerSplitterOnePage> {
       _couplerResults = couplerCalc.calculateLoss();
       _splitterResults = splitterCalc.calculateLoss();
 
-      // Only calculate WDM if value is not 0.0
-      if (wdmValue != 0.0) {
-        final wdmCalc = WDMCalculator(wdmValue: wdmValue);
-        _wdmCouplerResults = wdmCalc.calculateWDMCoupler();
-        _wdmSplitterResults = wdmCalc.calculateWDMSplitter();
-      } else {
-        _wdmCouplerResults = [];
-        _wdmSplitterResults = [];
-      }
+      // ✅ ALWAYS calculate WDM - even for 0.0
+      final wdmCalc = WDMCalculator(wdmValue: wdmValue);
+      _wdmCouplerResults = wdmCalc.calculateWDMCoupler();
+      _wdmSplitterResults = wdmCalc.calculateWDMSplitter();
     });
   }
 
