@@ -7,6 +7,7 @@ class User {
   final String phone;
   final String mobileNumber;
   final String networkName;
+  final String location; // ✅ NEW
   final String role; // 'admin', 'staff', 'user'
   final DateTime? createdAt;
 
@@ -17,6 +18,7 @@ class User {
     required this.phone,
     this.mobileNumber = '',
     this.networkName = '',
+    this.location = '', // ✅ NEW
     this.role = 'user',
     this.createdAt,
   });
@@ -30,6 +32,7 @@ class User {
       'phone': phone.trim(),
       'mobile_number': mobileNumber.trim(),
       'network_name': networkName.trim(),
+      'location': location.trim(), // ✅ NEW
       'role': role,
       if (createdAt != null) 'created_at': createdAt!.toIso8601String(),
     };
@@ -44,6 +47,7 @@ class User {
       phone: json['phone']?.toString() ?? '',
       mobileNumber: json['mobile_number']?.toString() ?? '',
       networkName: json['network_name']?.toString() ?? '',
+      location: json['location']?.toString() ?? '', // ✅ NEW
       role: json['role']?.toString() ?? 'user',
       createdAt: json['created_at'] != null
           ? DateTime.tryParse(json['created_at'].toString())
@@ -62,6 +66,7 @@ class User {
       phone: metadata?['phone']?.toString() ?? '',
       mobileNumber: metadata?['mobile_number']?.toString() ?? '',
       networkName: metadata?['network_name']?.toString() ?? '',
+      location: metadata?['location']?.toString() ?? '', // ✅ NEW
       role: metadata?['role']?.toString() ?? 'user',
     );
   }
@@ -72,6 +77,6 @@ class User {
 
   @override
   String toString() {
-    return 'User(id: $id, name: $name, email: $email, role: $role)';
+    return 'User(id: $id, name: $name, email: $email, location: $location, role: $role)';
   }
 }

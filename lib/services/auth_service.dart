@@ -1,92 +1,105 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../models/user.dart' as local_user;
+import '../models/user.dart' as app_user;
 
 class AuthService {
   final SupabaseClient _client = Supabase.instance.client;
 
-  /// 🔹 LOGIN using Supabase Auth
-  Future<local_user.User?> login(String email, String password) async {
+  /// 🔹 REGISTER (AUTH ONLY — EMAIL CONFIRMATION)
+  Future<void> registerUser(String email, String password) async {
     try {
-      final AuthResponse res = await _client.auth.signInWithPassword(
+      final res = await _client.auth.signUp(
         email: email.trim(),
         password: password.trim(),
       );
 
-      final User? supabaseUser = res.user;
-      if (supabaseUser == null) {
-        throw Exception("Invalid credentials");
-      }
-
-      return local_user.User(
-        email: supabaseUser.email ?? '',
-        name: supabaseUser.userMetadata?['name']?.toString() ?? 'User',
-        phone: supabaseUser.userMetadata?['phone']?.toString() ?? '',
-      );
-    } on AuthException catch (e) {
-      throw Exception(e.message);
-    } catch (e) {
-      throw Exception('Login failed: $e');
-    }
-  }
-
-  /// 🔹 REGISTER new user using Supabase Auth
-  Future<void> registerUser(
-    local_user.User user,
-    String password,
-  ) async {
-    try {
-      final AuthResponse res = await _client.auth.signUp(
-        email: user.email.trim(),
-        password: password.trim(),
-        data: {
-          'name': user.name.trim(),
-          'phone': user.phone.trim(),
-        },
-      );
-
       if (res.user == null) {
-        throw Exception('Registration failed — please check details');
+        throw Exception('Auth user creation failed');
       }
     } on AuthException catch (e) {
       throw Exception(e.message);
-    } catch (e) {
-      throw Exception('Registration failed: $e');
     }
   }
 
-  /// 🔹 RESET PASSWORD via Supabase
+  Future<app_user.User?> getCurrentUser() async {
+    final authUser = _client.auth.currentUser;
+    if (authUser == null) return null;
+
+    final profile =
+        await _client.from('profiles').select().eq('id', authUser.id).single();
+
+    return app_user.User.fromJson(profile);
+  }
+
+  /// 🔹 LOGIN
+  Future<app_user.User> login(String email, String password) async {
+    try {
+      final res = await _client.auth.signInWithPassword(
+        email: email.trim(),
+        password: password.trim(),
+      );
+
+      final authUser = res.user;
+      if (authUser == null) {
+        throw Exception('Invalid credentials');
+      }
+
+      if (authUser.emailConfirmedAt == null) {
+        await _client.auth.signOut();
+        throw Exception('Please verify your email before logging in.');
+      }
+
+      await movePendingProfileToProfiles();
+
+      final profile = await _client
+          .from('profiles')
+          .select()
+          .eq('id', authUser.id)
+          .single();
+
+      return app_user.User.fromJson(profile);
+    } catch (e) {
+      throw Exception(e.toString());
+    }
+  }
+
+  Future<void> movePendingProfileToProfiles() async {
+    final user = _client.auth.currentUser;
+    if (user == null || user.email == null) return;
+
+    final existing = await _client
+        .from('profiles')
+        .select('id')
+        .eq('id', user.id)
+        .maybeSingle();
+
+    if (existing != null) return;
+
+    final pending = await _client
+        .from('pending_profiles')
+        .select()
+        .eq('email', user.email!)
+        .maybeSingle();
+
+    if (pending == null) return;
+
+    await _client.from('profiles').insert({
+      'id': user.id,
+      'email': user.email,
+      'name': pending['name'],
+      'phone': pending['phone'],
+      'network_name': pending['network_name'],
+      'location': pending['location'],
+      'role': 'user',
+    });
+
+    await _client.from('pending_profiles').delete().eq('email', user.email!);
+  }
+
   Future<void> resetPassword(String email) async {
-    try {
-      await _client.auth.resetPasswordForEmail(email.trim());
-    } on AuthException catch (e) {
-      throw Exception(e.message);
-    } catch (e) {
-      throw Exception('Password reset failed: $e');
-    }
+    await _client.auth.resetPasswordForEmail(email.trim());
   }
 
-  /// 🔹 Get currently logged in user
-  local_user.User? getCurrentUser() {
-    final User? supabaseUser = _client.auth.currentUser;
-
-    if (supabaseUser == null) return null;
-
-    return local_user.User(
-      email: supabaseUser.email ?? '',
-      name: supabaseUser.userMetadata?['name']?.toString() ?? 'User',
-      phone: supabaseUser.userMetadata?['phone']?.toString() ?? '',
-    );
-  }
-
-  /// 🔹 Logout user
   Future<void> logout() async {
-    try {
-      await _client.auth.signOut();
-    } catch (e) {
-      throw Exception('Logout failed: $e');
-    }
+    await _client.auth.signOut();
   }
-
-  /// 🔹 Check if user logged in
-  bool get isLoggedIn => _client.auth.currentUser != null;
 }
